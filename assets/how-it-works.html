@@ -1,0 +1,166 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8" />
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #fff; --border: #e3e6eb; --text: #15181d; --muted: #667085;
+    --brand: #dc2626; --allow: #15803d; --ask: #c2410c; --deny: #dc2626; --ddl: #7c3aed; --blue: #3366f2;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); font-family: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; color: var(--text); }
+  .page { width: 1200px; padding: 56px 64px 48px; }
+  header { display: flex; align-items: center; gap: 20px; margin-bottom: 14px; }
+  .logo { width: 64px; height: 64px; border-radius: 15px; background: var(--brand); color: #fff; font-weight: 700; font-size: 26px; display: grid; place-items: center; flex-shrink: 0; }
+  h1 { font-size: 40px; line-height: 1.1; margin: 0; letter-spacing: -0.02em; }
+  .tagline { font-size: 22px; color: var(--muted); margin: 6px 0 0; }
+  .why { margin: 26px 0 34px; padding: 18px 24px; background: #fff7ed; border: 1px solid #fed7aa; border-radius: 14px; font-size: 19px; line-height: 1.45; }
+  .why strong { color: var(--ask); }
+
+  .step { display: grid; grid-template-columns: 64px 1fr 430px; gap: 26px; align-items: center; background: var(--card); border: 1px solid var(--border); border-radius: 18px; padding: 26px 28px; margin-bottom: 18px; box-shadow: 0 1px 2px rgb(16 24 40 / 0.04); }
+  .num { width: 56px; height: 56px; border-radius: 50%; background: var(--text); color: #fff; font-size: 26px; font-weight: 700; display: grid; place-items: center; }
+  .step h2 { font-size: 26px; margin: 0 0 8px; letter-spacing: -0.01em; }
+  .step p { font-size: 18px; line-height: 1.45; color: #3b4351; margin: 0; }
+  .step p b { color: var(--text); }
+
+  .mock { background: var(--bg); border: 1px solid var(--border); border-radius: 14px; padding: 16px; font-size: 15px; }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 13.5px; }
+  .row { display: flex; align-items: center; gap: 10px; }
+  .row + .row { margin-top: 10px; }
+  .grow { flex: 1; min-width: 0; }
+  .muted { color: var(--muted); }
+  .ok { color: var(--allow); font-weight: 700; }
+  .pill { font-size: 12.5px; font-weight: 700; padding: 3px 10px; border-radius: 999px; white-space: nowrap; }
+  .allow { color: var(--allow); background: #dcfce7; }
+  .ask { color: var(--ask); background: #ffedd5; }
+  .deny { color: var(--deny); background: #fee2e2; }
+  .chip { font-size: 11.5px; font-weight: 800; letter-spacing: 0.04em; padding: 2px 8px; border-radius: 6px; text-transform: uppercase; }
+  .chip.read { color: var(--allow); background: #dcfce7; }
+  .chip.write { color: var(--ask); background: #ffedd5; }
+  .chip.ddl { color: var(--ddl); background: #ede9fe; }
+  .chip.admin { color: var(--deny); background: #fee2e2; }
+  .keyrow { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 9px 12px; }
+  .avatar { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; font-size: 16px; flex-shrink: 0; }
+
+  .notif { background: rgb(255 255 255 / 0.92); border: 1px solid var(--border); border-radius: 18px; padding: 14px 16px; box-shadow: 0 8px 24px rgb(16 24 40 / 0.12); }
+  .notif .app { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  .notif .app .icon { width: 22px; height: 22px; border-radius: 6px; background: var(--brand); color: #fff; font-size: 10px; font-weight: 700; display: grid; place-items: center; }
+  .notif .title { font-weight: 700; font-size: 16px; }
+  .notif .body { font-size: 14px; color: #3b4351; margin-top: 2px; }
+
+  .btn { border-radius: 9px; padding: 9px 14px; font-weight: 600; font-size: 14.5px; border: 1px solid var(--border); background: #fff; white-space: nowrap; }
+  .btn.approve { background: var(--allow); border-color: var(--allow); color: #fff; }
+  .btn.deny { color: var(--deny); border-color: #fca5a5; }
+  .btn.trust { border-style: dashed; border-color: #f59e0b; color: var(--ask); background: #fffbeb; }
+
+  .rule { background: #fff; border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; }
+  .rule + .rule { margin-top: 7px; }
+
+  footer { margin-top: 30px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .fact { background: var(--card); border: 1px solid var(--border); border-radius: 14px; padding: 16px 18px; font-size: 16px; line-height: 1.4; color: #3b4351; }
+  .fact b { display: block; color: var(--text); font-size: 17px; margin-bottom: 4px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <div class="logo">2φ</div>
+    <div>
+      <h1>Twophase</h1>
+      <p class="tagline">Your agent prepares. You commit. A safety net between AI agents and your production database.</p>
+    </div>
+  </header>
+
+  <div class="why">
+    AI agents are great at databases, until one runs the wrong <span class="mono">UPDATE</span> on production.
+    This sits in the middle: <b>reading is instant</b>, but <strong>anything that changes data waits for a human tap</strong> on your phone.
+  </div>
+
+  <!-- 1 -->
+  <section class="step">
+    <div class="num">1</div>
+    <div>
+      <h2>Add a database connection</h2>
+      <p>Connect your Postgres once. <b>The proxy keeps the real password</b>, so no agent or teammate ever sees it.</p>
+    </div>
+    <div class="mock">
+      <div class="row">
+        <div class="avatar" style="background:#e0e7ff">🐘</div>
+        <div class="grow"><b>Production</b><div class="muted mono">app_proxy@db.internal:5432/app</div></div>
+        <span class="ok">● connected</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 2 -->
+  <section class="step">
+    <div class="num">2</div>
+    <div>
+      <h2>Give each client its own key</h2>
+      <p>One credential per agent, script or person. <b>See exactly who did what</b>, and switch off one key without touching the others.</p>
+    </div>
+    <div class="mock">
+      <div class="row keyrow"><div class="avatar" style="background:#fde68a">🤖</div><div class="grow"><b>claude-laptop</b> <span class="muted mono">tp_8fK2…</span></div><span class="pill allow">active</span></div>
+      <div class="row keyrow"><div class="avatar" style="background:#bae6fd">⚙️</div><div class="grow"><b>ci-bot</b> <span class="muted mono">tp_2aQx…</span></div><span class="pill allow">active</span></div>
+      <div class="row keyrow"><div class="avatar" style="background:#e9d5ff">🧑‍💻</div><div class="grow"><b>analyst</b> <span class="muted">read-only</span></div><span class="pill allow">active</span></div>
+    </div>
+  </section>
+
+  <!-- 3 -->
+  <section class="step">
+    <div class="num">3</div>
+    <div>
+      <h2>Get a push when it matters</h2>
+      <p>Lookups go straight through. When a key tries to <b>change data</b>, it pauses and your phone shows the exact SQL.</p>
+    </div>
+    <div class="notif">
+      <div class="app"><div class="icon">2φ</div> Twophase · now</div>
+      <div class="title">Approve write on orders?</div>
+      <div class="body">claude-laptop → Production</div>
+      <div class="body mono" style="margin-top:6px">UPDATE orders SET status = 'refunded'<br>WHERE id = 4211</div>
+      <div class="body muted" style="margin-top:4px">≈ 1 row affected</div>
+    </div>
+  </section>
+
+  <!-- 4 -->
+  <section class="step">
+    <div class="num">4</div>
+    <div>
+      <h2>Approve once, or for a while</h2>
+      <p>Approve just this one. Or let it keep working: <b>“trust writes on orders for 30 minutes”</b> means the next ones go straight through.</p>
+    </div>
+    <div class="mock">
+      <div class="row" style="flex-wrap:wrap; gap:8px">
+        <span class="btn approve">Approve once</span>
+        <span class="btn trust">Trust 30 min</span>
+        <span class="btn deny">Deny</span>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <span class="muted" style="font-size:14px">⏱ claude-laptop may <b style="color:var(--text)">write on orders</b> · 30 min left</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- 5 -->
+  <section class="step">
+    <div class="num">5</div>
+    <div>
+      <h2>Set standing rules once</h2>
+      <p>Decide per database what's always fine, what asks, and what's never allowed. <b>Everything is logged.</b></p>
+    </div>
+    <div class="mock">
+      <div class="row rule"><span class="chip read">read</span><span class="grow muted">any table</span><span class="pill allow">Allow</span></div>
+      <div class="row rule"><span class="chip write">write</span><span class="grow muted">any table</span><span class="pill ask">Ask me</span></div>
+      <div class="row rule"><span class="chip write">write</span><span class="grow mono">audit_log</span><span class="pill deny">Never</span></div>
+      <div class="row rule"><span class="chip admin">admin</span><span class="grow muted">DROP DATABASE, GRANT, …</span><span class="pill deny">Never</span></div>
+    </div>
+  </section>
+
+  <footer>
+    <div class="fact"><b>Works with anything</b>AI agents (MCP) and normal tools like psql, apps and ORMs, all under the same rules.</div>
+    <div class="fact"><b>Reads SQL like Postgres does</b>Uses Postgres's own parser, so a sneaky write disguised as a read still gets caught.</div>
+    <div class="fact"><b>Private by default</b>Runs on our own server, reachable only on our private network (Tailscale).</div>
+  </footer>
+</div>
+</body>
+</html>
