@@ -22,11 +22,18 @@ interface Named {
   userName: string | null;
 }
 
+export type Engine = 'postgres' | 'mysql' | 'mariadb';
+export const ENGINES: Engine[] = ['postgres', 'mysql', 'mariadb'];
+export const ENGINE_LABEL: Record<Engine, string> = { postgres: 'Postgres', mysql: 'MySQL', mariadb: 'MariaDB' };
+export const DEFAULT_PORT: Record<Engine, number> = { postgres: 5432, mysql: 3306, mariadb: 3306 };
+/** MySQL and MariaDB share a wire protocol (and a listener). */
+export const isMysql = (engine: Engine) => engine !== 'postgres';
+
 export interface Database {
   id: string;
   slug: string;
   name: string;
-  engine: 'postgres';
+  engine: Engine;
   host: string;
   port: number;
   database: string;
@@ -46,7 +53,7 @@ export interface Database {
 }
 
 /** Fields for create/update. Passwords are write-only: omit to leave unchanged. */
-export type DatabaseDraft = Omit<Database, 'id' | 'createdAt' | 'engine' | 'hasPassword' | 'hasReadonlyPassword'> & {
+export type DatabaseDraft = Omit<Database, 'id' | 'createdAt' | 'hasPassword' | 'hasReadonlyPassword'> & {
   password?: string;
   readonlyPassword?: string | null;
 };
@@ -83,6 +90,8 @@ export interface ProxyUser {
   tokenPrefix: string;
   enabled: boolean;
   access: DatabaseAccess[];
+  /** False for clients from before MySQL support until their token is used over MCP or rotated. */
+  mysqlLogin: boolean;
   createdAt: string;
   lastUsedAt: string | null;
 }
@@ -175,6 +184,7 @@ export interface ProxyStatus {
   auth: { mode: 'token' | 'tailscale'; device: string | null; login: string | null };
   version: string;
   wire: { enabled: boolean; port: number };
+  mysqlWire: { enabled: boolean; port: number };
   apnsEnabled: boolean;
   webPushSubscriptions: number;
   approvalTimeoutSeconds: number;
@@ -305,3 +315,11 @@ export const proxyHost = () => location.hostname;
 export function psqlUrl(username: string, token: string, slug: string, port: number) {
   return `postgresql://${encodeURIComponent(username)}:${encodeURIComponent(token)}@${proxyHost()}:${port}/${slug}?sslmode=disable`;
 }
+
+export function mysqlUrl(username: string, token: string, slug: string, port: number) {
+  return `mysql://${encodeURIComponent(username)}:${encodeURIComponent(token)}@${proxyHost()}:${port}/${slug}`;
+}
+
+/** The proxy's listener port for a database's wire protocol. */
+export const wirePort = (status: ProxyStatus | null, engine: Engine) => (isMysql(engine) ? (status?.mysqlWire?.port ?? 3307) : (status?.wire.port ?? 6432));
+export const wireEnabled = (status: ProxyStatus | null, engine: Engine) => !!(isMysql(engine) ? status?.mysqlWire?.enabled : status?.wire.enabled);

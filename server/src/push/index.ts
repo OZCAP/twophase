@@ -1,4 +1,5 @@
 import type { Config } from '../config.js';
+import { ENGINE_LABELS } from '../engines/index.js';
 import { previewSql } from '../events.js';
 import type { Approval, DatabaseConfig, ProxyUser, Store } from '../store.js';
 import { ApnsSender } from './apns.js';
@@ -26,7 +27,7 @@ export class PushService {
   async notifyApproval(approval: Approval, db: DatabaseConfig, user: ProxyUser) {
     const title = approvalTitle(approval);
     const preview = previewSql(approval.sql);
-    const who = `${user.name} via ${approval.surface === 'wire' ? 'Postgres' : 'MCP'} → ${db.name}`;
+    const who = `${user.name} via ${approval.surface === 'wire' ? ENGINE_LABELS[db.engine] : 'MCP'} → ${db.name}`;
     const ttlSeconds = (approval.expiresAt.getTime() - Date.now()) / 1000;
 
     const webPayload: WebPushPayload = {

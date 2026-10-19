@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { previewSql, type AuditEntry } from '../api';
+import { previewSql, type AuditEntry, type Engine } from '../api';
 import { useProxy } from '../state';
 import { attempt, Code, Empty, OpChip, relative, useNow } from '../ui';
 
@@ -13,8 +13,11 @@ const DECISION_LABEL: Record<AuditEntry['decision'], string> = {
   cancelled: 'cancelled',
 };
 
+const WIRE_LABEL: Record<Engine, string> = { postgres: 'PG', mysql: 'MySQL', mariadb: 'MariaDB' };
+
 export function ActivityView() {
-  const { activity, loadMoreActivity } = useProxy();
+  const { activity, loadMoreActivity, databases } = useProxy();
+  const engineOf = (id: string) => databases.find((d) => d.id === id)?.engine;
   const [open, setOpen] = useState<number | null>(null);
   const now = useNow(30_000);
 
@@ -34,7 +37,7 @@ export function ActivityView() {
                     {(e.verbs?.length ? e.verbs : e.operations).map((op) => (
                       <OpChip key={op} op={op} />
                     ))}{' '}
-                    <span className="surface">{e.surface === 'wire' ? 'PG' : 'MCP'}</span>{' '}
+                    <span className="surface">{e.surface === 'wire' ? WIRE_LABEL[engineOf(e.databaseId) ?? 'postgres'] : 'MCP'}</span>{' '}
                     <span className="muted">
                       {e.userName} → {e.databaseName}
                     </span>

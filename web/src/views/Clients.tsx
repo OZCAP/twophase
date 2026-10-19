@@ -1,10 +1,10 @@
 import { useState } from 'react';
-import { psqlUrl, type Database, type DatabaseAccess, type IssuedToken, type ProxyUser } from '../api';
+import { ENGINE_LABEL, isMysql, mysqlUrl, proxyHost, psqlUrl, wirePort, type Database, type DatabaseAccess, type IssuedToken, type ProxyUser } from '../api';
 import { go, useProxy } from '../state';
 import { attempt, Code, CopyButton, Empty, Modal, relative, TRUST_DURATIONS } from '../ui';
 import { GrantRow } from './Approvals';
 
-const surfaces = (a: DatabaseAccess) => [a.allowMcp && 'MCP', a.allowWire && 'Postgres'].filter(Boolean).join(' + ') || 'no access';
+const surfaces = (a: DatabaseAccess, db?: Database) => [a.allowMcp && 'MCP', a.allowWire && (db ? ENGINE_LABEL[db.engine] : 'wire')].filter(Boolean).join(' + ') || 'no access';
 
 export function ClientsView({ userId }: { userId?: string }) {
   const { users, databases } = useProxy();
@@ -40,7 +40,7 @@ export function ClientsView({ userId }: { userId?: string }) {
                       <strong>{u.name}</strong> <span className="muted mono small">{u.username}</span> {!u.enabled && <span className="pill pill-denied">disabled</span>}
                     </div>
                     <div className="muted small ellipsis">
-                      {u.access.map((a) => `${dbName(a.databaseId)} (${surfaces(a)})`).join(', ') || 'no databases'}
+                      {u.access.map((a) => `${dbName(a.databaseId)} (${surfaces(a, databases.find((d) => d.id === a.databaseId))})`).join(', ') || 'no databases'}
                     </div>
                   </div>
                   <span className="muted small">{u.lastUsedAt ? `active ${relative(u.lastUsedAt)}` : 'never connected'}</span>
@@ -85,8 +85,8 @@ function AccessEditor({ databases, access, onChange }: { databases: Database[]; 
             <label className="check small" title="Hosted MCP tools (query, list_tables, …)">
               <input type="checkbox" disabled={!a} checked={!!a?.allowMcp} onChange={(e) => set(d.id, { allowMcp: e.target.checked })} /> MCP
             </label>
-            <label className="check small" title="Connect with psql, apps and ORMs">
-              <input type="checkbox" disabled={!a} checked={!!a?.allowWire} onChange={(e) => set(d.id, { allowWire: e.target.checked })} /> Postgres
+            <label className="check small" title={`Connect with ${isMysql(d.engine) ? 'the mysql client' : 'psql'}, apps and ORMs`}>
+              <input type="checkbox" disabled={!a} checked={!!a?.allowWire} onChange={(e) => set(d.id, { allowWire: e.target.checked })} /> {ENGINE_LABEL[d.engine]}
             </label>
             <span />
           </li>
@@ -119,9 +119,12 @@ function ClientDetail({ user, onIssued }: { user: ProxyUser; onIssued(t: IssuedT
         </label>
       </div>
       <div className="muted small">
-        Postgres user <span className="mono">{user.username}</span> · token <span className="mono">{user.tokenPrefix}…</span> · created {relative(user.createdAt)} ·{' '}
+        Login <span className="mono">{user.username}</span> · token <span className="mono">{user.tokenPrefix}…</span> · created {relative(user.createdAt)} ·{' '}
         {user.lastUsedAt ? `last connected ${relative(user.lastUsedAt)}` : 'never connected'}
       </div>
+      {!user.mysqlLogin && user.access.some((a) => a.allowWire && databases.find((d) => d.id === a.databaseId && isMysql(d.engine))) && (
+        <p className="warn small">This token predates MySQL support: it can't log in with a MySQL client until it's used once over MCP or rotated.</p>
+      )}
 
       <section>
         <h3>Database access</h3>
@@ -238,7 +241,6 @@ function NewClient({ databases, onClose, onCreated }: { databases: Database[]; o
 
 function TokenReveal({ issued, databases, onClose }: { issued: IssuedToken; databases: Database[]; onClose(): void }) {
   const { status } = useProxy();
-  const port = status?.wire.port ?? 6432;
   const byId = new Map(databases.map((d) => [d.id, d]));
   const mcpDbs = issued.user.access.filter((a) => a.allowMcp).map((a) => byId.get(a.databaseId)!).filter(Boolean);
   const wireDbs = issued.user.access.filter((a) => a.allowWire).map((a) => byId.get(a.databaseId)!).filter(Boolean);
@@ -249,7 +251,13 @@ function TokenReveal({ issued, databases, onClose }: { issued: IssuedToken; data
     2,
   );
   const cli = mcpDbs.map((d) => `claude mcp add --transport http ${d.slug} ${location.origin}/mcp/${d.slug} \\\n  --header "Authorization: Bearer ${issued.token}"`).join('\n\n');
-  const psql = wireDbs.map((d) => `psql "${psqlUrl(issued.user.username, issued.token, d.slug, port)}"`).join('\n');
+  const pgDbs = wireDbs.filter((d) => !isMysql(d.engine));
+  const myDbs = wireDbs.filter((d) => isMysql(d.engine));
+  const psql = pgDbs.map((d) => `psql "${psqlUrl(issued.user.username, issued.token, d.slug, wirePort(status, d.engine))}"`).join('\n');
+  const mysqlCli = myDbs
+    .map((d) => `${d.engine === 'mariadb' ? 'mariadb' : 'mysql'} -h ${proxyHost()} -P ${wirePort(status, d.engine)} -u ${issued.user.username} -p ${d.slug}`)
+    .join('\n');
+  const mysqlUrls = myDbs.map((d) => mysqlUrl(issued.user.username, issued.token, d.slug, wirePort(status, d.engine))).join('\n');
 
   return (
     <Modal title={`Token for ${issued.user.name}`} onClose={onClose}>
@@ -259,7 +267,24 @@ function TokenReveal({ issued, databases, onClose }: { issued: IssuedToken; data
           <code className="mono grow token">{issued.token}</code>
           <CopyButton text={issued.token} />
         </div>
-        {wireDbs.length > 0 && (
+        {myDbs.length > 0 && (
+          <>
+            <div className="row">
+              <h3 className="grow">MySQL / MariaDB connection</h3>
+              <CopyButton text={mysqlCli} />
+            </div>
+            <p className="muted small">
+              User <span className="mono">{issued.user.username}</span>, password = the token (paste it at the prompt). For apps and ORMs:
+            </p>
+            <Code>{mysqlCli}</Code>
+            <div className="row">
+              <span className="grow muted small">Connection URL</span>
+              <CopyButton text={mysqlUrls} />
+            </div>
+            <Code>{mysqlUrls}</Code>
+          </>
+        )}
+        {pgDbs.length > 0 && (
           <>
             <div className="row">
               <h3 className="grow">Postgres connection</h3>

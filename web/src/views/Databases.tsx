@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { defaultKey, OPERATIONS, proxyHost, VERBS, type Action, type ConnectionTest, type Database, type DatabaseDraft, type Operation, type PolicyTarget, type Rule, type TableInfo, type Verb } from '../api';
+import { DEFAULT_PORT, defaultKey, ENGINE_LABEL, ENGINES, isMysql, OPERATIONS, proxyHost, VERBS, wireEnabled, wirePort, type Engine, type Action, type ConnectionTest, type Database, type DatabaseDraft, type Operation, type PolicyTarget, type Rule, type TableInfo, type Verb } from '../api';
 import { go, useProxy } from '../state';
 import { ACTION_LABEL, ActionBadge, ActionPicker, attempt, CopyButton, Empty, Modal, OP_DESCRIPTION, OP_LABEL, OpChip, VERB_DESCRIPTION, VERB_LABEL } from '../ui';
 
@@ -18,14 +18,14 @@ export function DatabasesView({ databaseId }: { databaseId?: string }) {
         </button>
       </div>
       {databases.length === 0 ? (
-        <Empty title="No databases yet">Add a Postgres database. Clients then reach it through the proxy's MCP or as a Postgres server.</Empty>
+        <Empty title="No databases yet">Add a Postgres, MySQL or MariaDB database. Clients then reach it through the proxy's MCP, or with their usual client as if it were the database itself.</Empty>
       ) : (
         <ul className="list">
           {databases.map((d) => (
             <li key={d.id} className="row clickable" onClick={() => go(`databases/${d.id}`)}>
               <div className="grow">
                 <div>
-                  <strong>{d.name}</strong> <span className="muted mono">{d.slug}</span>
+                  <strong>{d.name}</strong> <span className="muted mono">{d.slug}</span> <span className="pill">{ENGINE_LABEL[d.engine]}</span>
                   {!d.enabled && <span className="pill">disabled</span>}
                 </div>
                 <div className="muted small mono ellipsis">
@@ -99,7 +99,8 @@ function DatabaseDetail({ db }: { db: Database }) {
     });
 
   const mcpUrl = `${location.origin}/mcp/${db.slug}`;
-  const pgEndpoint = `${proxyHost()}:${status?.wire.port ?? 6432}/${db.slug}`;
+  const wireEndpoint = `${proxyHost()}:${wirePort(status, db.engine)}/${db.slug}`;
+  const engine = ENGINE_LABEL[db.engine];
 
   return (
     <div className="stack">
@@ -136,7 +137,16 @@ function DatabaseDetail({ db }: { db: Database }) {
           </dd>
           <dt>Status</dt>
           <dd>
-            {!test ? 'checking…' : test.ok ? <span className="badge badge-allow" style={{ marginLeft: 0 }}>connected · Postgres {test.serverVersion}</span> : <span className="error">{test.error}</span>}
+            {!test ? (
+              'checking…'
+            ) : test.ok ? (
+              <span className="badge badge-allow" style={{ marginLeft: 0 }}>
+                connected · {/mariadb/i.test(test.serverVersion ?? '') ? '' : `${engine} `}
+                {test.serverVersion}
+              </span>
+            ) : (
+              <span className="error">{test.error}</span>
+            )}
           </dd>
         </dl>
         {test?.warnings?.map((w) => (
@@ -155,20 +165,27 @@ function DatabaseDetail({ db }: { db: Database }) {
           </div>
           <CopyButton text={mcpUrl} />
         </div>
-        {status?.wire.enabled && (
+        {wireEnabled(status, db.engine) && (
           <div className="row">
             <div className="grow">
-              <div className="muted small">Postgres (psql, apps, ORMs) — user and password come from a client</div>
-              <div className="mono ellipsis">{pgEndpoint}</div>
+              <div className="muted small">
+                {engine} ({isMysql(db.engine) ? 'mysql' : 'psql'}, apps, ORMs) — user and password come from a client
+              </div>
+              <div className="mono ellipsis">{wireEndpoint}</div>
             </div>
-            <CopyButton text={pgEndpoint} />
+            <CopyButton text={wireEndpoint} />
           </div>
         )}
       </section>
 
       <section>
         <h3>Defaults</h3>
-        <p className="muted small">What happens to each kind of statement when no rule matches. Statements are classified with Postgres's own parser.</p>
+        <p className="muted small">
+          What happens to each kind of statement when no rule matches.{' '}
+          {isMysql(db.engine)
+            ? 'Statements are classified the way MySQL reads them: quoting, comments and executable comments included.'
+            : "Statements are classified with Postgres's own parser."}
+        </p>
         <ul className="list">
           {OPERATIONS.map((op) => (
             <li key={op}>
@@ -287,10 +304,11 @@ const slugify = (n: string) =>
 function DatabaseEditor({ db, onClose }: { db?: Database; onClose(): void }) {
   const { api, refreshDatabases } = useProxy();
   const [f, setF] = useState({
+    engine: (db?.engine ?? 'postgres') as Engine,
     name: db?.name ?? '',
     slug: db?.slug ?? '',
     host: db?.host ?? '',
-    port: String(db?.port ?? 5432),
+    port: String(db?.port ?? DEFAULT_PORT.postgres),
     database: db?.database ?? '',
     user: db?.user ?? '',
     password: '',
@@ -307,6 +325,7 @@ function DatabaseEditor({ db, onClose }: { db?: Database; onClose(): void }) {
   const save = async () => {
     setBusy(true);
     const draft: Partial<DatabaseDraft> = {
+      engine: f.engine,
       name: f.name,
       slug: f.slug,
       host: f.host.trim(),
@@ -339,7 +358,7 @@ function DatabaseEditor({ db, onClose }: { db?: Database; onClose(): void }) {
   };
 
   return (
-    <Modal title={db ? `Edit ${db.name}` : 'Add Postgres database'} onClose={onClose}>
+    <Modal title={db ? `Edit ${db.name}` : 'Add database'} onClose={onClose}>
       <form
         className="form"
         onSubmit={(e) => {
@@ -347,6 +366,28 @@ function DatabaseEditor({ db, onClose }: { db?: Database; onClose(): void }) {
           void save();
         }}
       >
+        <label>
+          Engine
+          <select
+            value={f.engine}
+            onChange={(e) => {
+              const engine = e.target.value as Engine;
+              // Follow the engine's default port unless one was typed.
+              setF((cur) => ({ ...cur, engine, port: cur.port === String(DEFAULT_PORT[cur.engine]) ? String(DEFAULT_PORT[engine]) : cur.port }));
+            }}
+          >
+            {ENGINES.map((e) => (
+              <option key={e} value={e}>
+                {ENGINE_LABEL[e]}
+              </option>
+            ))}
+          </select>
+        </label>
+        {isMysql(f.engine) && (
+          <p className="muted small" style={{ marginTop: -6 }}>
+            Postgres-compatible databases (Supabase, Neon, Timescale, CockroachDB, …) use Postgres; Aurora MySQL, PlanetScale and TiDB use MySQL.
+          </p>
+        )}
         <label>
           Name
           <input
@@ -385,7 +426,9 @@ function DatabaseEditor({ db, onClose }: { db?: Database; onClose(): void }) {
           </label>
         </div>
         <p className="muted small" style={{ marginTop: -6 }}>
-          Use a dedicated role with only the privileges you'd ever approve — never a superuser. Clients never see these credentials.
+          {isMysql(f.engine)
+            ? 'Use a dedicated user with privileges on this database only — never root or *.* grants. Clients never see these credentials.'
+            : "Use a dedicated role with only the privileges you'd ever approve — never a superuser. Clients never see these credentials."}
         </p>
         <label>
           TLS to the database
@@ -400,7 +443,7 @@ function DatabaseEditor({ db, onClose }: { db?: Database; onClose(): void }) {
           <summary className="muted">Read-only login and limits</summary>
           <div className="form" style={{ marginTop: 12 }}>
             <p className="muted small">
-              Optional: a role with only SELECT. Postgres connections from clients that can never write use it, enforced by the database itself.
+              Optional: a login with only SELECT. Wire connections from clients that can never write use it, enforced by the database itself.
             </p>
             <div className="row" style={{ alignItems: 'flex-end' }}>
               <label className="grow">

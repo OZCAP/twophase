@@ -4,7 +4,9 @@ import type { AddressInfo } from 'node:net';
 import { createRequire } from 'node:module';
 import webpush from 'web-push';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import mysql from 'mysql2/promise';
 import { createTestDatabase, postgresAvailable, startProxy, type TestDatabase } from './helpers.js';
+import { createMysqlTestDatabase, mysqlAvailable, seedMysql } from './mysql-helpers.js';
 
 const ece = createRequire(import.meta.url)('http_ece') as {
   decrypt(buf: Buffer, params: { version: string; privateKey: ReturnType<typeof createECDH>; authSecret: string }): Buffer;
@@ -130,5 +132,25 @@ describe.skipIf(!available)('web push', () => {
 
     const testMsg = push.received.find((r) => r.path === '/sub/live')!;
     expect(live.decrypt(testMsg.body)).toMatchObject({ type: 'message', title: 'Twophase' });
+  });
+});
+
+describe.skipIf(!(await mysqlAvailable('mariadb')))('web push for MySQL-protocol clients', () => {
+  it('names the engine and the client program in the notification', async () => {
+    const mdb = await createMysqlTestDatabase('mariadb');
+    const { client } = await seedMysql(proxy, mdb, 'maria');
+    const sub = browserSubscription(`${pushBase}/sub/maria`);
+    await proxy.admin('POST', '/push/subscriptions', sub.json);
+    const c = await mysql.createConnection({ host: '127.0.0.1', port: proxy.mysqlWirePort, user: client.user.username, password: client.token, database: 'maria' });
+    const run = c.query('DELETE FROM orders WHERE id = 1');
+    const pending = await proxy.nextPending();
+    await expect.poll(() => push.received.filter((r) => r.path === '/sub/maria').length).toBe(1);
+    const msg = sub.decrypt(push.received.find((r) => r.path === '/sub/maria')!.body);
+    expect(msg).toMatchObject({ title: 'Approve delete on orders?', body: 'agent via MariaDB → Shop\nDELETE FROM orders WHERE id = 1', approvalId: pending.id });
+    await proxy.admin('POST', `/approvals/${pending.id}/decision`, { decision: 'deny' });
+    await expect(run).rejects.toMatchObject({ errno: 1227 });
+    await c.end();
+    await proxy.admin('DELETE', `/push/subscriptions?endpoint=${encodeURIComponent(sub.json.endpoint)}`);
+    await mdb.drop();
   });
 });

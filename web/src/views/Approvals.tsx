@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { previewSql, type Approval, type DecisionScope, type Grant, type PolicyTarget } from '../api';
+import { ENGINE_LABEL, previewSql, type Approval, type DecisionScope, type Grant, type PolicyTarget } from '../api';
 import { useProxy } from '../state';
 import { attempt, Code, describeAccess, Empty, OpChip, relative, targetLabel, TRUST_DURATIONS, useNow } from '../ui';
 
@@ -79,7 +79,7 @@ function warningsFor(a: Approval): { text: string; danger?: boolean }[] {
 }
 
 function PendingCard({ approval: a, focused }: { approval: Approval; focused: boolean }) {
-  const { decide } = useProxy();
+  const { decide, databases } = useProxy();
   const now = useNow();
   const [busy, setBusy] = useState(false);
   const [minutes, setMinutes] = useState<number | null>(10);
@@ -87,7 +87,8 @@ function PendingCard({ approval: a, focused }: { approval: Approval; focused: bo
   // What's being asked, as specifically as we know it: DELETE rather than write.
   const askedTargets = [...new Set(a.asked.map((x): PolicyTarget => x.verb ?? x.op))];
   const warnings = warningsFor(a);
-  const via = a.surface === 'wire' ? `Postgres${a.session?.applicationName ? ` (${a.session.applicationName})` : ''}` : 'MCP';
+  const engine = databases.find((d) => d.id === a.databaseId)?.engine;
+  const via = a.surface === 'wire' ? `${engine ? ENGINE_LABEL[engine] : 'SQL client'}${a.session?.applicationName ? ` (${a.session.applicationName})` : ''}` : 'MCP';
 
   const act = (d: Parameters<typeof decide>[1]) => {
     setBusy(true);

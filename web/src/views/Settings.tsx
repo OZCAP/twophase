@@ -20,6 +20,8 @@ export function SettingsView() {
           <dd>{live ? 'connected' : 'reconnecting…'}</dd>
           <dt>Postgres listener</dt>
           <dd className="mono">{status ? (status.wire.enabled ? `${location.hostname}:${status.wire.port}` : 'disabled') : '…'}</dd>
+          <dt>MySQL listener</dt>
+          <dd className="mono">{status ? (status.mysqlWire?.enabled ? `${location.hostname}:${status.mysqlWire.port}` : 'disabled') : '…'}</dd>
           <dt>Approval timeout</dt>
           <dd>{status ? `${status.approvalTimeoutSeconds}s (APPROVAL_TIMEOUT_SECONDS)` : '…'}</dd>
           <dt>Signed in</dt>
