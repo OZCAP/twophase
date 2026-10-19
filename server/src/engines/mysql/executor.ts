@@ -149,6 +149,11 @@ export class MysqlExecutor implements Executor {
     return value;
   }
 
+  /** Stored-function / UDF catalog for classifying wire sessions (which track their own sql_mode). */
+  async catalog(): Promise<RoutineCatalog | null> {
+    return (await this.serverContext()).catalog;
+  }
+
   invalidateCatalog() {
     this.server = null;
   }

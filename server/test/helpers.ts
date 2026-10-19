@@ -90,10 +90,11 @@ export async function startProxy(overrides: Partial<Config> = {}, deps: { whois?
       approvalTimeoutSeconds: 5,
       ...overrides,
       wire: { enabled: true, host: '127.0.0.1', port: 0, publicPort: 0, ...overrides.wire },
+      mysqlWire: { enabled: true, host: '127.0.0.1', port: 0, publicPort: 0, ...overrides.mysqlWire },
     },
     deps,
   );
-  const { httpPort, wirePort } = await proxy.listen();
+  const { httpPort, wirePort, mysqlWirePort } = await proxy.listen();
   const base = `http://127.0.0.1:${httpPort}`;
 
   async function admin<T = any>(method: string, path: string, body?: unknown): Promise<T> {
@@ -149,6 +150,7 @@ export async function startProxy(overrides: Partial<Config> = {}, deps: { whois?
   return {
     base,
     wirePort: wirePort!,
+    mysqlWirePort: mysqlWirePort!,
     admin,
     mcp,
     wire,

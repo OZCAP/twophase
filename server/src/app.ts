@@ -8,6 +8,7 @@ import { forgetAdminToken, resolveAdminTokenHash } from './auth.js';
 import type { Config } from './config.js';
 import { initAnalyzer } from './engines/postgres/analyze.js';
 import { ExecutorRegistry } from './engines/index.js';
+import { startMysqlWireListener } from './engines/mysql/wire/listener.js';
 import { startWireListener } from './engines/postgres/wire/listener.js';
 import { EventBus } from './events.js';
 import { Gate } from './gate.js';
@@ -45,6 +46,10 @@ export function createApp(config: Config, overrides: { whois?: Whois } = {}) {
     ? startWireListener({ store, gate, executors, approvalTimeoutSeconds: config.approvalTimeoutSeconds }, { host: config.wire.host, port: config.wire.port })
     : null;
 
+  const mysqlWire = config.mysqlWire.enabled
+    ? startMysqlWireListener({ store, gate, executors }, { host: config.mysqlWire.host, port: config.mysqlWire.port })
+    : null;
+
   const app = express();
   app.disable('x-powered-by');
   app.use(express.json({ limit: '4mb' }));
@@ -60,19 +65,21 @@ export function createApp(config: Config, overrides: { whois?: Whois } = {}) {
     app,
     store,
     approvals,
-    /** Loads the SQL parser, then starts HTTP (admin + MCP) and the Postgres listener. */
-    async listen(): Promise<{ http: HttpServer; httpPort: number; wirePort: number | null }> {
+    /** Loads the SQL parser, then starts HTTP (admin + MCP) and the Postgres and MySQL listeners. */
+    async listen(): Promise<{ http: HttpServer; httpPort: number; wirePort: number | null; mysqlWirePort: number | null }> {
       await initAnalyzer();
       http = await new Promise<HttpServer>((resolve) => {
         const s = app.listen(config.port, config.host, () => resolve(s));
       });
       const wirePort = wire ? await wire.listen() : null;
-      return { http, httpPort: (http.address() as AddressInfo).port, wirePort };
+      const mysqlWirePort = mysqlWire ? await mysqlWire.listen() : null;
+      return { http, httpPort: (http.address() as AddressInfo).port, wirePort, mysqlWirePort };
     },
     async close() {
       approvals.shutdown();
       http?.close();
       await wire?.close();
+      await mysqlWire?.close();
       await mcp.close();
       await executors.closeAll();
       push.close();
