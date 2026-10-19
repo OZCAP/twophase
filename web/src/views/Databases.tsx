@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { DEFAULT_PORT, defaultKey, ENGINE_LABEL, ENGINES, isMysql, OPERATIONS, proxyHost, VERBS, wireEnabled, wirePort, type Engine, type Action, type ConnectionTest, type Database, type DatabaseDraft, type Operation, type PolicyTarget, type Rule, type TableInfo, type Verb } from '../api';
 import { go, useProxy } from '../state';
-import { ACTION_LABEL, ActionBadge, ActionPicker, attempt, CopyButton, Empty, Modal, OP_DESCRIPTION, OP_LABEL, OpChip, VERB_DESCRIPTION, VERB_LABEL } from '../ui';
+import { ACTION_LABEL, ActionBadge, ActionPicker, attempt, CopyButton, Empty, Modal, OP_LABEL, OpChip, opDescription, VERB_LABEL, verbDescription, verbsFor } from '../ui';
 
 export function DatabasesView({ databaseId }: { databaseId?: string }) {
   const { databases } = useProxy();
@@ -191,7 +191,7 @@ function DatabaseDetail({ db }: { db: Database }) {
             <li key={op}>
               <div className="row tool-row" style={{ flexWrap: 'nowrap' }}>
                 <div className="grow">
-                  <OpChip op={op} /> <span className="muted small">{OP_DESCRIPTION[op]}</span>
+                  <OpChip op={op} /> <span className="muted small">{opDescription(op, db.engine)}</span>
                 </div>
                 <ActionPicker value={db[defaultKey(op)]} onChange={(a) => setDefault(op, a)} />
               </div>
@@ -199,12 +199,12 @@ function DatabaseDetail({ db }: { db: Database }) {
                 <details className="verbs" open={VERBS[op].some((v) => verbRule(v))}>
                   <summary className="muted small">Fine-tune by statement type</summary>
                   <ul className="verb-list">
-                    {VERBS[op].map((verb) => {
+                    {verbsFor(op, db.engine).map((verb) => {
                       const rule = verbRule(verb);
                       return (
                         <li key={verb} className="row tool-row">
                           <div className="grow">
-                            <OpChip op={verb} /> <span className="muted small">{VERB_DESCRIPTION[verb]}</span>
+                            <OpChip op={verb} /> <span className="muted small">{verbDescription(verb, db.engine)}</span>
                           </div>
                           <VerbPicker value={rule?.action ?? null} inherited={db[defaultKey(op)]} onChange={(a) => setVerbDefault(verb, a)} />
                         </li>
@@ -283,8 +283,9 @@ function DatabaseDetail({ db }: { db: Database }) {
       {ruleEditor && (
         <RuleEditor
           databaseId={db.id}
+          engine={db.engine}
           rule={ruleEditor}
-          tableNames={tables?.map((t) => (t.schema === 'public' ? t.name : `${t.schema}.${t.name}`)) ?? []}
+          tableNames={tables?.map((t) => (t.schema === 'public' || (isMysql(db.engine) && t.schema === db.database) ? t.name : `${t.schema}.${t.name}`)) ?? []}
           users={users}
           onClose={() => setRuleEditor(null)}
           onSaved={() => attempt(load)}
@@ -491,6 +492,7 @@ function DatabaseEditor({ db, onClose }: { db?: Database; onClose(): void }) {
 
 function RuleEditor({
   databaseId,
+  engine,
   rule,
   tableNames,
   users,
@@ -498,6 +500,7 @@ function RuleEditor({
   onSaved,
 }: {
   databaseId: string;
+  engine: Engine;
   rule: Rule | Partial<Rule>;
   tableNames: string[];
   users: { id: string; name: string }[];
@@ -536,13 +539,13 @@ function RuleEditor({
             {OPERATIONS.map((op) => (
               <optgroup key={op} label={OP_LABEL[op]}>
                 <option value={op}>
-                  {op === 'admin' ? 'admin' : `any ${OP_LABEL[op]}`} — {OP_DESCRIPTION[op]}
+                  {op === 'admin' ? 'admin' : `any ${OP_LABEL[op]}`} — {opDescription(op, engine)}
                 </option>
                 {op !== 'read' &&
                   op !== 'admin' &&
-                  VERBS[op].map((verb) => (
+                  verbsFor(op, engine).map((verb) => (
                     <option key={verb} value={verb}>
-                      {VERB_LABEL[verb]} — {VERB_DESCRIPTION[verb]}
+                      {VERB_LABEL[verb]} — {verbDescription(verb, engine)}
                     </option>
                   ))}
               </optgroup>

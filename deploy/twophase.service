@@ -1,0 +1,23 @@
+# systemd unit for a source checkout. Install:
+#   sudo cp deploy/twophase.service /etc/systemd/system/
+#   sudo cp deploy/twophase.env.example /etc/twophase/twophase.env   # then edit
+#   sudo systemctl daemon-reload && sudo systemctl enable --now twophase
+# Adjust WorkingDirectory and the node path (`which node`, Node 22.13+) to your install.
+[Unit]
+Description=Twophase database approval proxy
+After=network-online.target tailscaled.service docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/twophase/server
+EnvironmentFile=/etc/twophase/twophase.env
+ExecStart=/usr/bin/node dist/index.js
+Restart=on-failure
+RestartSec=3
+# The proxy only needs its data directory; everything else stays read-only.
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

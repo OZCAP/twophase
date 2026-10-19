@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { targetOperation, type Access, type Action, type Operation, type PolicyTarget, type Verb } from './api';
+import { isMysql, targetOperation, VERBS, type Access, type Action, type Engine, type Operation, type PolicyTarget, type Verb } from './api';
 
 export const ACTION_LABEL: Record<Action, string> = { allow: 'Allow', approve: 'Ask', deny: 'Deny' };
 
@@ -51,6 +51,29 @@ export const VERB_DESCRIPTION: Partial<Record<Verb, string>> = {
   alter: 'ALTER, RENAME, COMMENT',
   drop: 'DROP anything',
 };
+
+const MYSQL_OP_DESCRIPTION: Record<Operation, string> = {
+  read: 'SELECT, SHOW, DESCRIBE, plain EXPLAIN',
+  write: 'INSERT, REPLACE, UPDATE, DELETE, TRUNCATE, row and table locks, stored functions, CALL',
+  ddl: 'CREATE, ALTER, DROP, RENAME — tables, indexes, views, procedures, …',
+  admin: 'GRANT, users, SET GLOBAL, sql_mode, LOAD DATA, INTO OUTFILE, KILL, … and anything unrecognised',
+};
+
+const MYSQL_VERB_DESCRIPTION: Partial<Record<Verb, string>> = {
+  insert: 'add rows (also REPLACE and INSERT … ON DUPLICATE KEY UPDATE)',
+  update: 'change rows (also ON DUPLICATE KEY UPDATE)',
+  delete: 'remove rows (also REPLACE)',
+  lock: 'SELECT … FOR UPDATE / LOCK IN SHARE MODE, LOCK TABLES',
+  function: 'stored functions, GET_LOCK(), sequences',
+  alter: 'ALTER, RENAME TABLE',
+};
+
+/** Postgres-only statement kinds aren't offered for MySQL / MariaDB databases. */
+const POSTGRES_ONLY = new Set<Verb>(['merge', 'notify', 'refresh']);
+
+export const opDescription = (op: Operation, engine: Engine) => (isMysql(engine) ? MYSQL_OP_DESCRIPTION : OP_DESCRIPTION)[op];
+export const verbDescription = (verb: Verb, engine: Engine) => (isMysql(engine) ? (MYSQL_VERB_DESCRIPTION[verb] ?? VERB_DESCRIPTION[verb]) : VERB_DESCRIPTION[verb]);
+export const verbsFor = (op: Operation, engine: Engine): readonly Verb[] => (isMysql(engine) ? VERBS[op].filter((v) => !POSTGRES_ONLY.has(v)) : VERBS[op]);
 
 /** Label for a rule/grant target: an operation ("write") or a verb ("DELETE"). */
 export const targetLabel = (t: PolicyTarget) => (targetOperation(t) === t ? OP_LABEL[t as Operation] : VERB_LABEL[t as Verb]);

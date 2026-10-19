@@ -8,22 +8,30 @@
 
 Twophase is a database proxy with a human in the loop. The name comes from two-phase commit:
 the agent prepares the change, and a human commits it. It holds the real credentials for your databases
-(Postgres today), gives each client its own token, and checks **every SQL statement** before it
-runs. Reads can go straight through, writes can wait for you to approve them on your phone, and
-dangerous statements are refused. Agents use the proxy's own MCP; psql, apps and ORMs connect to
-it as if it were Postgres. Both go through the same parser, rules, approvals and audit log.
+(**Postgres, MySQL and MariaDB**), gives each client its own token, and checks **every SQL
+statement** before it runs. Reads can go straight through, writes can wait for you to approve them
+on your phone, and dangerous statements are refused. Agents use the proxy's own MCP; psql, the
+mysql client, apps and ORMs connect to it as if it were the database. Everything goes through the
+same rules, approvals and audit log.
 
 ```
- agent ──MCP (Bearer tp_…)──▶ /mcp/<db>  ─┐
-                                            ├─▶ parse SQL ─▶ policy ─▶ trust window? ─▶ ask human ─▶ Postgres
- psql / app ──Postgres (SCRAM)──▶ :6432/<db>┘                                           │
-                                                                                         └─▶ PWA (live UI + Web Push)
+ agent ──MCP (Bearer tp_…)──────────▶ /mcp/<db>  ─┐
+ psql / app ──Postgres (SCRAM)──────▶ :6432/<db> ─┼─▶ parse SQL ─▶ policy ─▶ trust window? ─▶ ask human ─▶ database
+ mysql / app ──MySQL (caching_sha2)─▶ :3307/<db> ─┘                                          │
+                                                                                              └─▶ PWA (live UI + Web Push)
 ```
+
+**Engines.** Postgres; anything that speaks Postgres's protocol and SQL (Supabase, Neon,
+Timescale, AlloyDB, CockroachDB, …) uses the Postgres engine. MySQL 5.7+/8.x and MariaDB 10.2+;
+MySQL-compatible services (Aurora MySQL, PlanetScale, TiDB, …) use the MySQL engine.
 
 ## How statements are judged
 
-Every statement is parsed with **Postgres's own parser** (`libpg-query`, compiled to WASM) and
-classified, together with the tables it touches:
+Postgres statements are parsed with **Postgres's own parser** (`libpg-query`, compiled to WASM).
+MySQL and MariaDB statements are read by a lexer that sees SQL the way the server does: quotes,
+backslash escapes and `sql_mode` (`ANSI_QUOTES`, `NO_BACKSLASH_ESCAPES`), all three comment
+styles, and the *contents* of executable comments (`/*!50000 … */`, `/*M! … */`), which the server
+runs. Each statement is classified, together with the tables it touches:
 
 | Operation | Includes | Default |
 | --- | --- | --- |
@@ -31,6 +39,14 @@ classified, together with the tables it touches:
 | **write** | INSERT / UPDATE / DELETE / MERGE, TRUNCATE, COPY FROM, `SELECT … FOR UPDATE`, DML inside CTEs, side-effecting functions (`nextval`, volatile user functions, …) | Ask |
 | **ddl** | CREATE / ALTER / DROP of tables, indexes, views, functions, …; `SELECT INTO`, `CREATE TABLE AS` | Ask |
 | **admin** | GRANT, roles, VACUUM, `DO` blocks, server files / `COPY … PROGRAM`, `SET ROLE` and other privileged settings, `pg_terminate_backend`, `dblink`, **and anything unrecognised or unparseable** | Deny |
+
+On MySQL / MariaDB the same operations cover: `REPLACE` (an insert and a delete),
+`INSERT … ON DUPLICATE KEY UPDATE` (an insert and an update), `LOCK TABLES`, `CALL`, and **any
+stored function** (MySQL doesn't enforce `READS SQL DATA`, so it proves nothing) as writes;
+`LOAD DATA`, `SELECT … INTO OUTFILE`, `LOAD_FILE()`, `SET GLOBAL`, `sql_mode`, `foreign_key_checks`,
+users and grants, `KILL`, `USE` of another database, unsafe character sets (GBK, SJIS, Big5, …)
+and stored programs with multi-statement bodies as admin. MySQL table names are matched
+case-insensitively, and `shop.orders` is the same as `orders` when `shop` is the database.
 
 Some things that commonly slip past "read-only" checks are handled explicitly:
 - `EXPLAIN ANALYZE` counts as whatever it runs.
@@ -83,10 +99,12 @@ matching statements already waiting, and never override **Deny**.
 | `explain` | Plain EXPLAIN only. |
 
 How `query` runs statements:
-- **Reads** run inside `BEGIN READ ONLY … ROLLBACK`, so Postgres refuses any write the classifier
-  missed.
+- **Reads** run inside `BEGIN READ ONLY … ROLLBACK` (MySQL: `START TRANSACTION READ ONLY`), so the
+  database refuses any table write the classifier missed.
 - **Approved writes** run in one `BEGIN … COMMIT`, so a multi-statement call is atomic.
-- **Not available:** transaction control, session-wide `SET` (use `SET LOCAL`), `PREPARE` and `COPY`.
+- **Not available:** transaction control, session-wide `SET` (Postgres: use `SET LOCAL`), `PREPARE`,
+  `COPY`, `USE`, `LOCK TABLES`.
+- Parameters are `$1, $2, …` for Postgres and `?` for MySQL / MariaDB.
 
 Results are JSON with column names. Rows are capped per database (`maxRows`), with a
 truncation flag.
@@ -119,22 +137,52 @@ The proxy fails the statement on the real server too, so transaction state stays
 - replication connections;
 - fast-path function calls.
 
+### MySQL wire protocol (mysql CLI, apps, ORMs)
+
+```sh
+mysql -h <proxy-host> -P 3307 -u <client-username> -p <db-slug>      # paste the token at the prompt
+mysql://<client-username>:<client-token>@<proxy-host>:3307/<db-slug>  # apps and ORMs
+```
+
+**Login.** `caching_sha2_password` (fast auth) or `mysql_native_password`, checked against double
+hashes of the token, so the token never crosses the wire. Clients created before MySQL support
+can log in after their token is used once over MCP, or rotated.
+
+**Holding a statement.** The client just waits (MySQL has no notices). `KILL QUERY <id>` from
+another connection of the same client, which is what the mysql CLI's Ctrl+C sends, withdraws a
+held request or interrupts a running statement.
+
+**Denials** are `ERROR 1227 (42000)` (`1317 (70100)` for timeouts and cancels). A failed
+statement doesn't abort a MySQL transaction, so the session carries on, exactly as on the real
+server. A multi-statement query is decided as a whole.
+
+**Prepared statements** are gated at every `COM_STMT_EXECUTE`, and the card shows the bound
+values. SQL-level `PREPARE … FROM '…'` is judged at `EXECUTE` by what was prepared;
+`PREPARE … FROM @var` is admin.
+
+**Read-only clients** get `SET SESSION TRANSACTION READ ONLY` and, if configured, the read-only login.
+
+**Rejected:** TLS and compression to the proxy (traffic stays on the tailnet), `LOAD DATA LOCAL`,
+`COM_CHANGE_USER`, replication/binlog commands, `USE` of other databases.
+
 ## Layout
 
 | Path | What |
 | --- | --- |
 | `server/src/engines/postgres/` | `analyze.ts` (classifier), `functions.ts`, `executor.ts` (pool, MCP execution, estimates, catalog), `wire/` (listener, session, upstream, SCRAM, framing) |
+| `server/src/engines/mysql/` | `lexer.ts` + `analyze.ts` (classifier), `functions.ts`, `executor.ts` (mysql2), `wire/` (listener, session, upstream, auth, framing) |
+| `server/src/engines/index.ts` | engine registry: which executor and listener a database uses |
 | `server/src/` | `gate.ts` (policy → trust windows → approval → audit), `policy.ts`, `approvals.ts`, `mcp/`, `admin.ts`, `push/`, `store.ts` + `db/` (Drizzle ORM / SQLite) |
 | `web/` | React + Vite admin PWA (approvals, databases, clients, activity) with Web Push |
 | `ios/` | Native SwiftUI app: **unfinished**, parked until the web flow is settled |
 
-The core (policy, approvals, audit, UI) only knows operations and table names. Another engine
-(e.g. MySQL) would add a parser, an executor and a wire frontend under `engines/`.
+The core (policy, approvals, audit, UI) only knows operations, verbs and table names. An engine is
+a classifier, an `Executor` (see `engines/types.ts`) and optionally a wire listener.
 
 ## Run it locally
 
 ```sh
-# terminal 1: proxy (admin + MCP on :8787, Postgres listener on :6432)
+# terminal 1: proxy (admin + MCP on :8787, Postgres on :6432, MySQL on :3307)
 cd server && npm install
 ADMIN_TOKEN=dev-admin-token npm run dev
 
@@ -147,27 +195,32 @@ Open http://localhost:5173, sign in with the admin token, then:
 1. **Databases → Add database.** Use a dedicated role with only the privileges you'd ever approve,
    never a superuser. "Test connection" warns about over-privileged logins.
 2. Adjust the per-operation **defaults** and add **rules** (or click a table's badge to add one).
-3. **Clients → New client.** Pick its databases and whether it may use MCP, Postgres or both.
-   Copy the token and the generated `psql` URL, `.mcp.json` or `claude mcp add` snippet.
+3. **Clients → New client.** Pick its databases and whether it may use MCP, the wire protocol or
+   both. Copy the token and the generated `psql` / `mysql` command, `.mcp.json` or `claude mcp add`
+   snippet.
 4. Statements that need approval appear instantly under **Approvals**. Turn on push under
    **Settings** to get them on your phone.
 
 ## Deploy
 
 ```sh
-docker compose up -d --build   # admin/MCP on 127.0.0.1:8787, Postgres on 127.0.0.1:6432
+docker compose up -d --build   # admin/MCP on 127.0.0.1:8787, Postgres on :6432, MySQL on :3307
 ```
+
+Or from a checkout with systemd: `deploy/twophase.service` and `deploy/twophase.env.example`.
 
 Expose it privately, e.g. with Tailscale:
 
 ```sh
 tailscale serve --bg --https=10000 http://127.0.0.1:8787   # web UI, admin API, hosted MCP
 tailscale serve --bg --tcp=6432 tcp://127.0.0.1:6432       # Postgres clients
+tailscale serve --bg --tcp=3307 tcp://127.0.0.1:3307       # MySQL / MariaDB clients
 ```
 
-The Postgres listener does not offer TLS to clients; run it on a private network (WireGuard /
-Tailscale) or behind a TLS-terminating proxy. SCRAM means the token is never sent, even
-without TLS. TLS from the proxy to your database follows each database's `sslmode`.
+The listeners don't offer TLS to clients; run them on a private network (WireGuard / Tailscale)
+or behind a TLS-terminating proxy. The logins are challenge–response (SCRAM, caching_sha2 /
+native), so the token is never sent, even without TLS. TLS from the proxy to your database follows
+each database's `sslmode`.
 
 ### Sign in with Tailscale instead of an admin token
 
@@ -208,6 +261,8 @@ to the Home Screen** (Share → Add to Home Screen, open it from there, then Set
 | `PORT` / `HOST` | `8787` / `0.0.0.0` | Web UI, admin API, hosted MCP |
 | `WIRE_PORT` / `WIRE_HOST` | `6432` / `HOST` | Postgres listener; `WIRE_ENABLED=false` turns it off |
 | `WIRE_PUBLIC_PORT` | `WIRE_PORT` | Port shown in client snippets (if something in front remaps it) |
+| `MYSQL_WIRE_PORT` / `MYSQL_WIRE_HOST` | `3307` / `WIRE_HOST` | MySQL / MariaDB listener; `MYSQL_WIRE_ENABLED=false` turns it off |
+| `MYSQL_WIRE_PUBLIC_PORT` | `MYSQL_WIRE_PORT` | Port shown in client snippets |
 | `DATA_DIR` | `./data` | SQLite database |
 | `ADMIN_TOKEN` | generated | If unset, generated on first boot and printed once (only its hash is stored). `RESET_ADMIN_TOKEN=1` rotates it |
 | `ADMIN_AUTH` | `token` | `tailscale` = no token, authenticate by tailnet device |
@@ -246,15 +301,20 @@ mode and an optional read-only login.
   - protocol 3.2;
   - replication;
   - COPY over MCP.
-- **A held statement inside a transaction keeps its locks.** Upstream sessions get
-  `idle_in_transaction_session_timeout` set just above the approval timeout.
+- **A held statement inside a transaction keeps its locks.** Postgres upstream sessions get
+  `idle_in_transaction_session_timeout` set just above the approval timeout; on MySQL,
+  `innodb_lock_wait_timeout` applies to anyone waiting on those locks.
+- **MySQL classification is token-based**, not a full grammar. Anything it can't follow is
+  stricter (admin), never looser. Loadable UDFs are recognised only if the proxy's login can read
+  `mysql.func` / `performance_schema.user_defined_functions`. Give the proxy's MySQL login
+  privileges on its own database only (`GRANT … ON shop.*`), never `*.*`.
 - **The PWA keeps the admin token** (token mode) in localStorage and IndexedDB, so the service
   worker can act on notifications.
 
 ## Development
 
 ```sh
-cd server && npm test      # classifier, policy, MCP + wire integration (real Postgres), Web Push
+cd server && npm test      # classifiers, policy, MCP + wire integration (real Postgres, MySQL, MariaDB), Web Push
 cd web && npm run typecheck
 ```
 
@@ -265,7 +325,13 @@ database:
 docker run -d --name mcpp-test-postgres -e POSTGRES_USER=mcptest -e POSTGRES_PASSWORD=mcptest \
   -e POSTGRES_DB=shop -p 127.0.0.1:55432:5432 postgres:17-alpine
 # or point PG_TEST_URL at another superuser URL
+docker run -d --name twophase-test-mysql -e MYSQL_ROOT_PASSWORD=roottest -p 127.0.0.1:53306:3306 mysql:8.4
+docker run -d --name twophase-test-mariadb -e MARIADB_ROOT_PASSWORD=roottest -p 127.0.0.1:53307:3306 mariadb:11
+# or MYSQL_TEST_URL / MARIADB_TEST_URL (root URLs). The wire tests also run the real mysql and
+# mariadb command-line clients from those images via docker.
 ```
+
+Tests for an engine whose server isn't reachable are skipped.
 
 ### Database (Drizzle ORM)
 

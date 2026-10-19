@@ -20,5 +20,5 @@ COPY --from=build /app/web/dist /app/web/dist
 COPY server/package.json ./
 ENV DATA_DIR=/data PORT=8787
 VOLUME /data
-EXPOSE 8787 6432
+EXPOSE 8787 6432 3307
 CMD ["node", "dist/index.js"]
