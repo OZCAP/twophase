@@ -28,6 +28,8 @@ export interface Config {
   approvalTimeoutSeconds: number;
   /** Postgres wire-protocol listener (psql, apps, ORMs). */
   wire: { enabled: boolean; host: string; port: number; publicPort: number };
+  /** MySQL wire-protocol listener (mysql CLI, apps, ORMs) for MySQL and MariaDB databases. */
+  mysqlWire: { enabled: boolean; host: string; port: number; publicPort: number };
   /** Web Push (PWA). Keys are generated and persisted on first boot when unset. */
   vapid: { publicKey?: string; privateKey?: string; subject: string };
   apns: ApnsConfig | null;
@@ -64,6 +66,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       port: Number(env.WIRE_PORT ?? 6432),
       // Port clients should use (differs when something like `tailscale serve --tcp` fronts it).
       publicPort: Number(env.WIRE_PUBLIC_PORT ?? env.WIRE_PORT ?? 6432),
+    },
+    mysqlWire: {
+      enabled: env.MYSQL_WIRE_ENABLED !== 'false',
+      host: env.MYSQL_WIRE_HOST ?? env.WIRE_HOST ?? env.HOST ?? '0.0.0.0',
+      port: Number(env.MYSQL_WIRE_PORT ?? 3307),
+      publicPort: Number(env.MYSQL_WIRE_PUBLIC_PORT ?? env.MYSQL_WIRE_PORT ?? 3307),
     },
     vapid: {
       publicKey: env.VAPID_PUBLIC_KEY || undefined,

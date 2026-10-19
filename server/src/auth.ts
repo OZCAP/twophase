@@ -1,7 +1,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { Request } from 'express';
 import { createVerifier } from './engines/postgres/wire/scram.js';
-import type { Store } from './store.js';
+import type { MysqlVerifier, Store } from './store.js';
 
 export const hashToken = (token: string) => createHash('sha256').update(token).digest('hex');
 
@@ -10,10 +10,17 @@ export function generateToken(kind: 'client' | 'admin'): { token: string; hash: 
   return { token, hash: hashToken(token), prefix: token.slice(0, 12) };
 }
 
-/** A client token plus everything stored about it: its hash (MCP bearer auth) and a SCRAM verifier (Postgres logins). */
+const sha = (alg: 'sha1' | 'sha256', data: Buffer | string) => createHash(alg).update(data).digest();
+
+/** What a MySQL server stores to check a password: SHA1(SHA1(pw)) (mysql_native_password) and SHA256(SHA256(pw)) (caching_sha2_password fast auth). */
+export function mysqlVerifier(token: string): MysqlVerifier {
+  return { mysqlNativeHash: sha('sha1', sha('sha1', token)).toString('hex'), mysqlSha2Hash: sha('sha256', sha('sha256', token)).toString('hex') };
+}
+
+/** A client token plus everything stored about it: its hash (MCP bearer auth), a SCRAM verifier (Postgres logins) and MySQL verifiers. */
 export function issueClientToken() {
   const { token, hash, prefix } = generateToken('client');
-  return { token, stored: { tokenHash: hash, tokenPrefix: prefix, ...createVerifier(token) } };
+  return { token, stored: { tokenHash: hash, tokenPrefix: prefix, ...createVerifier(token), ...mysqlVerifier(token) } };
 }
 
 /** Postgres login name for a client: lowercase, [a-z0-9_], unique (suffix added on clash). */

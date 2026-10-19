@@ -21,6 +21,7 @@
     "drizzle-orm": "^0.45.4",
     "express": "^5.3.0",
     "libpg-query": "^18.1.5",
+    "mysql2": "^3.24.6",
     "pg": "^8.23.1",
     "pg-cursor": "^2.22.1",
     "web-push": "^3.6.7",

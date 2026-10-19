@@ -3,7 +3,7 @@ import net from 'node:net';
 import type { Gate } from '../../../gate.js';
 import { canOnlyRead } from '../../../policy.js';
 import type { Store } from '../../../store.js';
-import type { ExecutorRegistry } from '../executor.js';
+import { ENGINE_LABELS, type ExecutorRegistry } from '../../index.js';
 import {
   authOk,
   authSasl,
@@ -183,6 +183,7 @@ export function startWireListener(deps: WireDeps, opts: { host: string; port: nu
 
       const db = deps.store.getDatabaseBySlug(dbSlug);
       if (!db || !db.enabled) return fatal('3D000', `database "${dbSlug}" does not exist`);
+      if (db.engine !== 'postgres') return fatal('3D000', `database "${dbSlug}" is ${ENGINE_LABELS[db.engine]}: connect with a MySQL client on the MySQL port`);
       if (!user.access.some((a) => a.databaseId === db.id && a.allowWire)) {
         return fatal('28000', `client "${username}" has no Postgres access to database "${dbSlug}"`);
       }
@@ -235,7 +236,7 @@ export function startWireListener(deps: WireDeps, opts: { host: string; port: nu
         db,
         user,
         appName,
-        { gate: deps.gate, executor: deps.executors.get(db) },
+        { gate: deps.gate, executor: deps.executors.postgres(db) },
         { client: reader.drain(), upstream: upstream.leftover },
         () => sessions.delete(key),
       );

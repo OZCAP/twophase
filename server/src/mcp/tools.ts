@@ -3,9 +3,8 @@ import type { RequestHandlerExtra } from '@modelcontextprotocol/sdk/shared/proto
 import type { CallToolResult, ServerNotification, ServerRequest } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import type { Config } from '../config.js';
-import { analyze } from '../engines/postgres/analyze.js';
-import { QueryError, type ExecutorRegistry } from '../engines/postgres/executor.js';
-import type { Analysis, StatementAnalysis } from '../engines/types.js';
+import { ENGINE_LABELS, type ExecutorRegistry } from '../engines/index.js';
+import { QueryError, type Analysis, type StatementAnalysis } from '../engines/types.js';
 import type { Gate, GateOutcome } from '../gate.js';
 import { decideAccess } from '../policy.js';
 import type { DatabaseConfig, ProxyUser, Store } from '../store.js';
@@ -32,7 +31,9 @@ function unsupportedOverMcp(s: StatementAnalysis): string | null {
   if (s.flags.includes('session_setting')) return `${s.command}: use SET LOCAL, which applies to this call only.`;
   if (s.flags.includes('prepared_statement')) return 'PREPARE/EXECUTE/DEALLOCATE are not available here; pass parameters with `params` instead.';
   if (s.flags.includes('copy')) return 'COPY is not available over MCP. Use INSERT … SELECT or a regular SELECT.';
-  if (s.flags.includes('listen') || s.flags.includes('session_reset')) return `${s.command} is not available over MCP.`;
+  if (['listen', 'session_reset', 'use_database', 'table_locks', 'kill_query', 'kill_connection'].some((f) => s.flags.includes(f))) {
+    return `${s.command} is not available over MCP.`;
+  }
   if (/^(DECLARE CURSOR|FETCH|MOVE|CLOSE)\b/.test(s.command)) return 'Cursors are not available over MCP; use LIMIT/OFFSET.';
   return null;
 }
@@ -46,12 +47,13 @@ const synthetic = (command: string, table: string | null): Analysis => ({
 export function createDatabaseMcpServer(databaseId: string, userId: string, deps: McpDeps): McpServer {
   const { store, gate, executors } = deps;
   const initial = store.getDatabase(databaseId)!;
+  const placeholders = executors.get(initial).placeholder === '?' ? '?, ?, …' : '$1, $2, …';
 
   const server = new McpServer(
     { name: `twophase/${initial.slug}`, version: '0.2.0' },
     {
       instructions:
-        `SQL access to the ${initial.engine} database "${initial.name}" through twophase. ` +
+        `SQL access to the ${ENGINE_LABELS[initial.engine]} database "${initial.name}" through twophase. ` +
         'Reads run in read-only transactions. Writes, DDL and admin statements may be denied or may wait for a human to approve them; ' +
         'the call blocks until a decision. If a statement is denied, do not retry it in another form unless asked to.',
     },
@@ -124,17 +126,17 @@ export function createDatabaseMcpServer(databaseId: string, userId: string, deps
       title: 'Run SQL',
       description:
         'Run one or more SQL statements and return the rows. Multiple statements run in one transaction. ' +
-        'Reads run read-only; writes/DDL may need human approval (the call waits). Use `params` ($1, $2, …) for values.',
+        `Reads run read-only; writes/DDL may need human approval (the call waits). Use \`params\` (${placeholders}) for values.`,
       inputSchema: {
         sql: z.string().min(1).describe('SQL to run. Separate multiple statements with semicolons.'),
-        params: z.array(z.union([z.string(), z.number(), z.boolean(), z.null()])).optional().describe('Values for $1, $2, … (single statement only).'),
+        params: z.array(z.union([z.string(), z.number(), z.boolean(), z.null()])).optional().describe(`Values for ${placeholders} (single statement only).`),
         maxRows: z.number().int().min(1).max(MAX_ROWS_LIMIT).optional().describe('Maximum rows returned per statement.'),
       },
     },
     async ({ sql, params, maxRows }, extra) => {
       const { db, user } = current();
       const exec = executors.get(db);
-      const analysis = analyze(sql, { catalog: await exec.functionCatalog() });
+      const analysis = await exec.analyze(sql);
       if (analysis.statements.length === 0) return fail('The query is empty.');
       if (params?.length && analysis.statements.length > 1) return fail('`params` can only be used with a single statement.');
       const unsupported = analysis.statements.map(unsupportedOverMcp).find(Boolean);
@@ -162,8 +164,9 @@ export function createDatabaseMcpServer(databaseId: string, userId: string, deps
       const { db, user } = current();
       return guarded(extra, { db, user, sql: `-- list_tables(${schema ?? ''})`, analysis: synthetic('LIST TABLES', null) }, async (outcome) => {
         const rules = store.listRules({ databaseId: db.id });
-        const visible = (await executors.get(db).listTables(schema)).filter(
-          (t) => decideAccess(rules, db, user.id, { op: 'read', verb: 'select', table: `${t.schema}.${t.name}` }).action !== 'deny',
+        const exec = executors.get(db);
+        const visible = (await exec.listTables(schema)).filter(
+          (t) => decideAccess(rules, db, user.id, { op: 'read', verb: 'select', table: exec.tableName(t) }).action !== 'deny',
         );
         outcome.finish({ rowCount: visible.length });
         return ok({ tables: visible });
@@ -205,7 +208,7 @@ export function createDatabaseMcpServer(databaseId: string, userId: string, deps
       const { db, user } = current();
       const exec = executors.get(db);
       // Classify exactly what will run, so "ANALYZE …" smuggled into the input is caught.
-      const analysis = analyze(`EXPLAIN ${sql}`, { catalog: await exec.functionCatalog() });
+      const analysis = await exec.analyze(`EXPLAIN ${sql}`);
       if (analysis.statements.length !== 1) return fail('explain takes exactly one statement.');
       if (analysis.statements[0].flags.includes('explain_analyze')) return fail('EXPLAIN ANALYZE executes the statement; use the query tool for that.');
       return guarded(extra, { db, user, sql: `EXPLAIN ${sql}`, analysis }, async (outcome) => {

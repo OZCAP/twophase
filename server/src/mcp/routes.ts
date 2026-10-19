@@ -3,7 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import { Router, type Response } from 'express';
 import { randomUUID } from 'node:crypto';
-import { bearerToken, hashToken } from '../auth.js';
+import { bearerToken, hashToken, mysqlVerifier } from '../auth.js';
 import { createDatabaseMcpServer, type McpDeps } from './tools.js';
 
 interface Session {
@@ -39,6 +39,8 @@ export function mcpRouter(deps: McpDeps) {
       res.setHeader('WWW-Authenticate', 'Bearer');
       return rpcError(res, 401, 'Invalid or missing proxy token');
     }
+    // Clients from before MySQL support: derive their MySQL verifiers the first time the token is seen.
+    if (!user.mysqlLogin) store.setMysqlVerifier(user.id, mysqlVerifier(token!));
     const db = store.getDatabaseBySlug(req.params.slug);
     if (!db || !db.enabled) return rpcError(res, 404, 'Unknown database');
     if (!user.access.some((a) => a.databaseId === db.id && a.allowMcp)) return rpcError(res, 403, 'This token has no MCP access to this database');

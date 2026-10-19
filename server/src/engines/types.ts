@@ -76,3 +76,50 @@ export interface Estimate {
   plan: string | null;
   error: string | null;
 }
+
+export interface ColumnInfo {
+  name: string;
+  type: string;
+}
+
+export interface StatementResult {
+  command: string;
+  rowCount: number | null;
+  columns: ColumnInfo[];
+  rows: Record<string, unknown>[];
+  truncated: boolean;
+}
+
+export class QueryError extends Error {
+  constructor(
+    message: string,
+    /** SQLSTATE, when the database reported one. */
+    readonly sqlstate: string | null,
+    readonly detail?: string,
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * The proxy's own connections to one database, used by the hosted MCP and the admin UI. Reads run
+ * inside read-only transactions, so the database itself refuses any write the classifier missed.
+ */
+export interface Executor {
+  /** How parameters are written in SQL passed to `run`: `$1` (Postgres) or `?` (MySQL). */
+  readonly placeholder: '$1' | '?';
+  /** Classify SQL as this database would run it (with its function catalog, quoting mode, …). */
+  analyze(sql: string): Promise<Analysis>;
+  /** Runs already-approved statements: read-only and rolled back, or as one committed transaction. */
+  run(statements: StatementAnalysis[], opts: { readOnly: boolean; params?: unknown[]; maxRows: number }): Promise<StatementResult[]>;
+  /** Planner estimate of rows a write would touch (plain EXPLAIN — nothing is executed). */
+  estimate(statements: StatementAnalysis[], params?: unknown[]): Promise<Estimate>;
+  explain(text: string): Promise<string>;
+  listTables(schema?: string): Promise<TableInfo[]>;
+  /** The name a listed table has in statement analyses (what rules match against). */
+  tableName(t: TableInfo): string;
+  describeTable(table: string, schema?: string): Promise<Record<string, unknown> | null>;
+  /** Connectivity check plus warnings about an over-privileged proxy login. */
+  test(): Promise<{ serverVersion: string; user: string; warnings: string[] }>;
+  close(): Promise<void>;
+}

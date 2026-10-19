@@ -5,7 +5,7 @@ import { POLICY_TARGETS, type Access, type Estimate, type Operation, type Statem
 // Column names are mapped camelCase → snake_case by `casing: 'snake_case'` (see db/index.ts, drizzle.config.ts).
 
 export const ACTIONS = ['allow', 'approve', 'deny'] as const;
-export const ENGINES = ['postgres'] as const;
+export const ENGINES = ['postgres', 'mysql', 'mariadb'] as const;
 export const SSL_MODES = ['disable', 'prefer', 'require', 'verify-full'] as const;
 export const SURFACES = ['mcp', 'wire'] as const;
 export const APPROVAL_STATUSES = ['pending', 'approved', 'denied', 'expired', 'cancelled'] as const;
@@ -61,6 +61,9 @@ export const users = sqliteTable('users', {
   scramIterations: integer().notNull(),
   scramStoredKey: text().notNull(),
   scramServerKey: text().notNull(),
+  /** MySQL logins (hex): SHA1(SHA1(token)) for mysql_native_password, SHA256(SHA256(token)) for caching_sha2_password. */
+  mysqlNativeHash: text(),
+  mysqlSha2Hash: text(),
   enabled: integer({ mode: 'boolean' }).notNull().default(true),
   createdAt: createdAt(),
   lastUsedAt: timestamp(),

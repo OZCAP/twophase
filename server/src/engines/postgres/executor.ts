@@ -2,39 +2,18 @@ import pg from 'pg';
 import Cursor from 'pg-cursor';
 import type { ConnectionOptions } from 'node:tls';
 import type { DatabaseConfig } from '../../store.js';
-import type { Estimate, StatementAnalysis, TableInfo } from '../types.js';
+import { capResultSize, jsonCell, uniqueNames } from '../results.js';
+import { QueryError, type Analysis, type Estimate, type Executor, type StatementAnalysis, type StatementResult, type TableInfo } from '../types.js';
+import { analyze } from './analyze.js';
 import type { FunctionCatalog } from './functions.js';
 
-export interface ColumnInfo {
-  name: string;
-  type: string;
-}
-
-export interface StatementResult {
-  command: string;
-  rowCount: number | null;
-  columns: ColumnInfo[];
-  rows: Record<string, unknown>[];
-  truncated: boolean;
-}
-
-export class QueryError extends Error {
-  constructor(
-    message: string,
-    readonly sqlstate: string | null,
-    readonly detail?: string,
-  ) {
-    super(message);
-  }
-}
+export { QueryError };
 
 const TYPE_NAMES: Record<number, string> = {
   16: 'bool', 17: 'bytea', 18: 'char', 19: 'name', 20: 'int8', 21: 'int2', 23: 'int4', 25: 'text', 26: 'oid',
   114: 'json', 700: 'float4', 701: 'float8', 1042: 'bpchar', 1043: 'varchar', 1082: 'date', 1083: 'time',
   1114: 'timestamp', 1184: 'timestamptz', 1186: 'interval', 1700: 'numeric', 2950: 'uuid', 3802: 'jsonb',
 };
-const MAX_CELL_CHARS = 10_000;
-const MAX_RESULT_BYTES = 256 * 1024;
 const CATALOG_TTL_MS = 5 * 60_000;
 
 /** node-postgres TLS options for an sslmode (`prefer` is resolved by probing; see `ssl()`). */
@@ -50,19 +29,13 @@ function toQueryError(err: unknown): QueryError {
   return new QueryError(e.message ?? String(err), typeof e.code === 'string' && /^[0-9A-Z]{5}$/.test(e.code) ? e.code : null, e.detail);
 }
 
-function jsonCell(v: unknown): unknown {
-  if (Buffer.isBuffer(v)) return `\\x${v.subarray(0, MAX_CELL_CHARS / 2).toString('hex')}${v.length > MAX_CELL_CHARS / 2 ? '…' : ''}`;
-  if (typeof v === 'string' && v.length > MAX_CELL_CHARS) return `${v.slice(0, MAX_CELL_CHARS)}…`;
-  if (typeof v === 'bigint') return v.toString();
-  return v;
-}
-
 /**
  * The proxy's own connections to one database: runs MCP queries, plans for estimates, catalog
  * lookups. Reads always run inside `BEGIN READ ONLY`, so Postgres itself refuses any write the
  * classifier might have missed.
  */
-export class PostgresExecutor {
+export class PostgresExecutor implements Executor {
+  readonly placeholder = '$1';
   private pool: pg.Pool | null = null;
   private resolvedSsl: Promise<ConnectionOptions | false> | null = null;
   private catalog: { at: number; value: Promise<FunctionCatalog | null> } | null = null;
@@ -140,6 +113,14 @@ export class PostgresExecutor {
     }).catch(() => null);
     this.catalog = { at: Date.now(), value };
     return value;
+  }
+
+  async analyze(sql: string): Promise<Analysis> {
+    return analyze(sql, { catalog: await this.functionCatalog() });
+  }
+
+  tableName(t: TableInfo): string {
+    return `${t.schema}.${t.name}`;
   }
 
   invalidateCatalog() {
@@ -309,15 +290,6 @@ export class PostgresExecutor {
   }
 }
 
-function uniqueNames(names: string[]): string[] {
-  const seen = new Map<string, number>();
-  return names.map((n) => {
-    const count = (seen.get(n) ?? 0) + 1;
-    seen.set(n, count);
-    return count === 1 ? n : `${n}_${count}`;
-  });
-}
-
 /** ModifyTable reports 0 rows unless RETURNING; the rows it will touch are its input's estimate. */
 function affectedRows(plan: Record<string, any>): number {
   const node = plan['Node Type'] === 'ModifyTable' && plan.Plans?.[0] ? plan.Plans[0] : plan;
@@ -330,49 +302,4 @@ function summarizePlan(plan: Record<string, any>): string {
   const child = plan.Plans?.[0];
   const via = child ? ` ← ${child['Node Type']}${child['Relation Name'] ? ` on ${child['Relation Name']}` : ''}${child['Index Name'] ? ` using ${child['Index Name']}` : ''}` : '';
   return `${node}${target}${via} — est. ${affectedRows(plan)} rows`;
-}
-
-/** Keep the whole response under ~256 KB by dropping trailing rows. */
-function capResultSize(results: StatementResult[]): StatementResult[] {
-  let size = JSON.stringify(results).length;
-  for (let i = results.length - 1; i >= 0 && size > MAX_RESULT_BYTES; i--) {
-    const r = results[i];
-    while (r.rows.length > 0 && size > MAX_RESULT_BYTES) {
-      const removed = r.rows.splice(Math.floor(r.rows.length / 2));
-      size -= JSON.stringify(removed).length;
-      r.truncated = true;
-    }
-  }
-  return results;
-}
-
-/** One executor per database, rebuilt when its config changes. */
-export class ExecutorRegistry {
-  private executors = new Map<string, PostgresExecutor>();
-
-  get(db: DatabaseConfig): PostgresExecutor {
-    const existing = this.executors.get(db.id);
-    if (existing && sameConnection(existing.db, db)) {
-      Object.assign(existing.db, db);
-      return existing;
-    }
-    void existing?.close();
-    const fresh = new PostgresExecutor({ ...db });
-    this.executors.set(db.id, fresh);
-    return fresh;
-  }
-
-  async drop(id: string) {
-    await this.executors.get(id)?.close();
-    this.executors.delete(id);
-  }
-
-  async closeAll() {
-    await Promise.all([...this.executors.values()].map((e) => e.close()));
-    this.executors.clear();
-  }
-}
-
-function sameConnection(a: DatabaseConfig, b: DatabaseConfig) {
-  return a.host === b.host && a.port === b.port && a.database === b.database && a.user === b.user && a.password === b.password && a.sslmode === b.sslmode;
 }

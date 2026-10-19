@@ -12,10 +12,14 @@ export type DatabaseConfig = typeof t.databases.$inferSelect;
 export type DatabaseInput = Omit<typeof t.databases.$inferInsert, 'id' | 'createdAt'>;
 export type DatabaseAccess = { databaseId: string; allowMcp: boolean; allowWire: boolean };
 type UserRow = typeof t.users.$inferSelect;
-export type ProxyUser = Omit<UserRow, 'tokenHash' | 'scramSalt' | 'scramIterations' | 'scramStoredKey' | 'scramServerKey'> & {
+export type ProxyUser = Omit<UserRow, 'tokenHash' | 'scramSalt' | 'scramIterations' | 'scramStoredKey' | 'scramServerKey' | 'mysqlNativeHash' | 'mysqlSha2Hash'> & {
   access: DatabaseAccess[];
+  /** False for clients created before MySQL support, until their token is used once over MCP or rotated. */
+  mysqlLogin: boolean;
 };
 export type ScramVerifier = Pick<UserRow, 'scramSalt' | 'scramIterations' | 'scramStoredKey' | 'scramServerKey'>;
+export type MysqlVerifier = { mysqlNativeHash: string; mysqlSha2Hash: string };
+export type StoredToken = { tokenHash: string; tokenPrefix: string } & ScramVerifier & MysqlVerifier;
 export type Rule = typeof t.rules.$inferSelect;
 export type Grant = typeof t.grants.$inferSelect;
 export type Approval = typeof t.approvals.$inferSelect;
@@ -92,8 +96,9 @@ export class Store {
       .from(t.userDatabases)
       .where(inArray(t.userDatabases.userId, rows.map((r) => r.id)))
       .all();
-    return rows.map(({ tokenHash: _h, scramSalt: _s, scramIterations: _i, scramStoredKey: _k, scramServerKey: _v, ...u }) => ({
+    return rows.map(({ tokenHash: _h, scramSalt: _s, scramIterations: _i, scramStoredKey: _k, scramServerKey: _v, mysqlNativeHash, mysqlSha2Hash, ...u }) => ({
       ...u,
+      mysqlLogin: !!(mysqlNativeHash && mysqlSha2Hash),
       access: links
         .filter((l) => l.userId === u.id)
         .map((l) => ({ databaseId: l.databaseId, allowMcp: l.allowMcp, allowWire: l.allowWire })),
@@ -119,11 +124,22 @@ export class Store {
     return { ...this.withAccess([row])[0], scram: { scramSalt, scramIterations, scramStoredKey, scramServerKey } };
   }
 
+  /** For MySQL wire logins: the user and its MySQL verifiers (null hashes if not yet derived). */
+  getMysqlLogin(username: string): (ProxyUser & { mysql: Partial<MysqlVerifier> }) | null {
+    const row = this.db.select().from(t.users).where(eq(t.users.username, username)).get();
+    if (!row) return null;
+    return { ...this.withAccess([row])[0], mysql: { mysqlNativeHash: row.mysqlNativeHash ?? undefined, mysqlSha2Hash: row.mysqlSha2Hash ?? undefined } };
+  }
+
+  setMysqlVerifier(id: string, v: MysqlVerifier) {
+    this.db.update(t.users).set(v).where(eq(t.users.id, id)).run();
+  }
+
   usernameTaken(username: string): boolean {
     return !!this.db.select({ id: t.users.id }).from(t.users).where(eq(t.users.username, username)).get();
   }
 
-  createUser(input: { name: string; username: string; tokenHash: string; tokenPrefix: string } & ScramVerifier, access: DatabaseAccess[]): ProxyUser {
+  createUser(input: { name: string; username: string } & StoredToken, access: DatabaseAccess[]): ProxyUser {
     const id = this.db.transaction((tx) => {
       const { id } = tx.insert(t.users).values(input).returning({ id: t.users.id }).get();
       if (access.length) tx.insert(t.userDatabases).values(access.map((a) => ({ userId: id, ...a }))).run();
@@ -145,7 +161,7 @@ export class Store {
     return this.getUser(id);
   }
 
-  setUserToken(id: string, token: { tokenHash: string; tokenPrefix: string } & ScramVerifier) {
+  setUserToken(id: string, token: StoredToken) {
     this.db.update(t.users).set(token).where(eq(t.users.id, id)).run();
   }
 

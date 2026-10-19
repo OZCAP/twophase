@@ -3,11 +3,12 @@ import { z } from 'zod';
 import { ApprovalError, type ApprovalService } from './approvals.js';
 import { bearerToken, hashToken, issueClientToken, safeEqualHex, usernameFor } from './auth.js';
 import type { Config } from './config.js';
-import type { ExecutorRegistry } from './engines/postgres/executor.js';
+import { DEFAULT_PORTS, protocolOf, type ExecutorRegistry } from './engines/index.js';
 import { OPERATIONS, POLICY_TARGETS } from './engines/types.js';
 import { EVENT_NAMES, type EventBus } from './events.js';
 import { decideAccess } from './policy.js';
 import type { PushService } from './push/index.js';
+import { ENGINES } from './db/schema.js';
 import type { DatabaseConfig, DatabaseInput, Store } from './store.js';
 import { isAllowed, tailnetCallerIp, type TailscaleIdentity, type Whois } from './tailscaleAuth.js';
 
@@ -39,6 +40,7 @@ const operation = z.enum(POLICY_TARGETS as [string, ...string[]]).transform((t) 
 const databaseFields = z.object({
   slug: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,62}$/, 'lowercase letters, digits, dashes and underscores'),
   name: z.string().min(1),
+  engine: z.enum(ENGINES),
   host: z.string().min(1),
   port: z.number().int().min(1).max(65535),
   database: z.string().min(1),
@@ -105,6 +107,9 @@ function parse<T extends z.ZodType>(schema: T, body: unknown): z.output<T> {
   return r.data;
 }
 
+/** MySQL table names are matched lowercased (the analyzer lowercases them), so patterns are too. */
+const tableCase = (db: DatabaseConfig, pattern: string | null) => (pattern && protocolOf(db.engine) === 'mysql' ? pattern.toLowerCase() : pattern);
+
 const intParam = (v: unknown) => (typeof v === 'string' && /^\d+$/.test(v) ? Number(v) : undefined);
 const strParam = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
 
@@ -155,6 +160,7 @@ export function adminRouter(deps: AdminDeps) {
       auth: { mode: auth.mode, device: identity?.node ?? null, login: identity?.login ?? null },
       version: '0.2.0',
       wire: { enabled: config.wire.enabled, port: config.wire.publicPort },
+      mysqlWire: { enabled: config.mysqlWire.enabled, port: config.mysqlWire.publicPort },
       apnsEnabled: push.apnsEnabled,
       webPushSubscriptions: store.listPushSubscriptions().length,
       approvalTimeoutSeconds: config.approvalTimeoutSeconds,
@@ -183,7 +189,7 @@ export function adminRouter(deps: AdminDeps) {
   r.post('/databases', (req, res) => {
     const body = parse(databaseCreate, req.body);
     if (store.getDatabaseBySlug(body.slug)) throw new HttpError(409, 'Slug already in use');
-    const input: DatabaseInput = { port: 5432, ...body };
+    const input: DatabaseInput = { port: DEFAULT_PORTS[body.engine ?? 'postgres'], ...body };
     res.status(201).json(publicDatabase(store.createDatabase(input)));
   });
 
@@ -220,8 +226,10 @@ export function adminRouter(deps: AdminDeps) {
     const db = mustDatabase(req.params.id);
     const userId = strParam(req.query.userId) ?? null;
     let tables;
+    let exec;
     try {
-      tables = await executors.get(db).listTables();
+      exec = executors.get(db);
+      tables = await exec.listTables();
     } catch (err) {
       throw new HttpError(502, `Database unavailable: ${err instanceof Error ? err.message : err}`);
     }
@@ -230,7 +238,7 @@ export function adminRouter(deps: AdminDeps) {
       tables.map((t) => ({
         ...t,
         actions: Object.fromEntries(
-          (['read', 'write', 'ddl'] as const).map((op) => [op, decideAccess(rules, db, userId, { op, verb: op === 'read' ? 'select' : op === 'write' ? 'update' : 'alter', table: `${t.schema}.${t.name}` }).action]),
+          (['read', 'write', 'ddl'] as const).map((op) => [op, decideAccess(rules, db, userId, { op, verb: op === 'read' ? 'select' : op === 'write' ? 'update' : 'alter', table: exec.tableName(t) }).action]),
         ),
       })),
     );
@@ -280,13 +288,15 @@ export function adminRouter(deps: AdminDeps) {
 
   r.post('/rules', (req, res) => {
     const body = parse(ruleCreate, req.body);
-    mustDatabase(body.databaseId);
+    body.tablePattern = tableCase(mustDatabase(body.databaseId), body.tablePattern);
     if (body.userId) mustUser(body.userId);
     res.status(201).json(withNames([store.createRule(body)])[0]);
   });
 
   r.patch('/rules/:id', (req, res) => {
     const patch = parse(rulePatch, req.body);
+    const existing = store.listRules().find((x) => x.id === req.params.id);
+    if (existing && patch.tablePattern !== undefined) patch.tablePattern = tableCase(mustDatabase(existing.databaseId), patch.tablePattern);
     if (patch.userId) mustUser(patch.userId);
     const rule = store.updateRule(req.params.id, patch) ?? fail(404, 'Rule not found');
     res.json(withNames([rule])[0]);
@@ -305,7 +315,7 @@ export function adminRouter(deps: AdminDeps) {
 
   r.post('/grants', (req, res) => {
     const body = parse(grantCreate, req.body);
-    mustDatabase(body.databaseId);
+    body.tablePattern = tableCase(mustDatabase(body.databaseId), body.tablePattern);
     if (body.userId) mustUser(body.userId);
     const grant = approvals.createGrant({
       databaseId: body.databaseId,

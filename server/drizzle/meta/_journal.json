@@ -15,6 +15,13 @@
       "when": 1792443205578,
       "tag": "0001_verbs",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1792447019172,
+      "tag": "0002_mysql_logins",
+      "breakpoints": true
     }
   ]
 }

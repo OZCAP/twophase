@@ -7,7 +7,7 @@ import { ApprovalService } from './approvals.js';
 import { forgetAdminToken, resolveAdminTokenHash } from './auth.js';
 import type { Config } from './config.js';
 import { initAnalyzer } from './engines/postgres/analyze.js';
-import { ExecutorRegistry } from './engines/postgres/executor.js';
+import { ExecutorRegistry } from './engines/index.js';
 import { startWireListener } from './engines/postgres/wire/listener.js';
 import { EventBus } from './events.js';
 import { Gate } from './gate.js';
