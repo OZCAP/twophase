@@ -152,6 +152,35 @@ describe('tables', () => {
   });
 });
 
+describe('verbs', () => {
+  const verbs = (sql: string) => [...new Set(one(sql).accesses.filter((a) => a.op !== 'read').map((a) => a.verb))].sort();
+  it.each([
+    ['INSERT INTO orders (total_cents) VALUES (1)', ['insert']],
+    ['UPDATE orders SET status = 1 WHERE id = 1', ['update']],
+    ['DELETE FROM orders WHERE id = 1', ['delete']],
+    ['MERGE INTO t USING s ON t.id = s.id WHEN MATCHED THEN DELETE', ['merge']],
+    ['INSERT INTO t (id) VALUES (1) ON CONFLICT (id) DO UPDATE SET id = excluded.id', ['insert', 'update']],
+    ['INSERT INTO t (id) VALUES (1) ON CONFLICT DO NOTHING', ['insert']],
+    ['TRUNCATE orders', ['truncate']],
+    ['COPY orders FROM STDIN', ['insert']],
+    ['SELECT * FROM orders FOR UPDATE', ['lock']],
+    ["SELECT nextval('s')", ['function']],
+    ['WITH d AS (DELETE FROM orders RETURNING *) SELECT * FROM d', ['delete']],
+    ['EXPLAIN ANALYZE DELETE FROM orders', ['delete']],
+    ['CREATE TABLE x (id int)', ['create']],
+    ['CREATE INDEX i ON orders (id)', ['create']],
+    ['ALTER TABLE orders ADD COLUMN c int', ['alter']],
+    ["COMMENT ON TABLE orders IS 'x'", ['alter']],
+    ['DROP TABLE orders', ['drop']],
+    ['GRANT SELECT ON orders TO x', ['admin']],
+  ])('%s → %j', (sql, expected) => {
+    expect(verbs(sql)).toEqual(expected);
+  });
+  it('reads are select', () => {
+    expect(one('SELECT * FROM orders').accesses.every((a) => a.verb === 'select')).toBe(true);
+  });
+});
+
 describe('flags', () => {
   it('flags UPDATE/DELETE without WHERE and destructive statements', () => {
     expect(one('DELETE FROM orders').flags).toContain('no_where');

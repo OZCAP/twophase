@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import type { Access, Action, Operation } from './api';
+import { targetOperation, type Access, type Action, type Operation, type PolicyTarget, type Verb } from './api';
 
 export const ACTION_LABEL: Record<Action, string> = { allow: 'Allow', approve: 'Ask', deny: 'Deny' };
 
@@ -19,12 +19,50 @@ export const OP_DESCRIPTION: Record<Operation, string> = {
   admin: 'GRANT, roles, VACUUM, DO blocks, server files, SET ROLE, … and anything unrecognised',
 };
 
-export function OpChip({ op }: { op: Operation }) {
-  return <span className={`chip chip-${op}`}>{OP_LABEL[op]}</span>;
+export const VERB_LABEL: Record<Verb, string> = {
+  select: 'SELECT',
+  insert: 'INSERT',
+  update: 'UPDATE',
+  delete: 'DELETE',
+  merge: 'MERGE',
+  truncate: 'TRUNCATE',
+  lock: 'row locks',
+  function: 'side-effect functions',
+  call: 'CALL',
+  notify: 'NOTIFY',
+  refresh: 'REFRESH',
+  create: 'CREATE',
+  alter: 'ALTER',
+  drop: 'DROP',
+  admin: 'admin',
+};
+export const VERB_DESCRIPTION: Partial<Record<Verb, string>> = {
+  insert: 'add rows (also COPY FROM)',
+  update: 'change rows (also the update half of an upsert)',
+  delete: 'remove rows',
+  merge: 'MERGE INTO …',
+  truncate: 'empty whole tables',
+  lock: 'SELECT … FOR UPDATE, LOCK TABLE',
+  function: 'nextval(), volatile functions',
+  call: 'stored procedures',
+  notify: 'NOTIFY / pg_notify',
+  refresh: 'REFRESH MATERIALIZED VIEW',
+  create: 'tables, indexes, views, functions, …',
+  alter: 'ALTER, RENAME, COMMENT',
+  drop: 'DROP anything',
+};
+
+/** Label for a rule/grant target: an operation ("write") or a verb ("DELETE"). */
+export const targetLabel = (t: PolicyTarget) => (targetOperation(t) === t ? OP_LABEL[t as Operation] : VERB_LABEL[t as Verb]);
+
+/** A chip for an operation or a verb, coloured by its operation. */
+export function OpChip({ op }: { op: PolicyTarget }) {
+  return <span className={`chip chip-${targetOperation(op)}`}>{targetLabel(op)}</span>;
 }
 
-/** "write on orders", "admin", "read on app.users". */
-export const describeAccess = (a: Access) => `${OP_LABEL[a.op]}${a.table ? ` on ${a.table}` : ''}`;
+/** "DELETE on orders", "read on app.users", "admin". */
+export const describeAccess = (a: Access) =>
+  `${a.op === 'read' || !a.verb || a.verb === a.op ? OP_LABEL[a.op] : VERB_LABEL[a.verb]}${a.table ? ` on ${a.table}` : ''}`;
 
 export function ActionBadge({ action }: { action: Action }) {
   return <span className={`badge badge-${action}`}>{ACTION_LABEL[action]}</span>;

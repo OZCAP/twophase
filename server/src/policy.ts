@@ -1,4 +1,4 @@
-import type { Access, Analysis, Operation } from './engines/types.js';
+import { targetOperation, type Access, type Analysis, type Operation, type PolicyTarget } from './engines/types.js';
 import type { Action, DatabaseConfig, Grant, Rule } from './store.js';
 
 const RESTRICTIVENESS: Record<Action, number> = { allow: 0, approve: 1, deny: 2 };
@@ -26,13 +26,23 @@ export function tableMatches(pattern: string | null, table: string | null): bool
   return globMatch(pattern, table) || globMatch(pattern, bare);
 }
 
+/** Is this a verb-level target (`delete`) rather than a whole operation (`write`)? `admin` is both. */
+export const isVerbTarget = (target: PolicyTarget) => targetOperation(target) !== target;
+
+/** Does a rule/grant target (`write`, `delete`, or null = anything) cover this access? */
+export function targetMatches(target: PolicyTarget | null, access: Access): boolean {
+  return target === null || target === access.op || target === access.verb;
+}
+
 /**
- * Specificity: a client-specific rule beats an everyone rule; an exact table beats a glob beats
- * "any table". Ties go to the stricter action, so overlapping rules never open things up.
+ * Specificity: a client-specific rule beats an everyone rule; then an exact table (2) beats a
+ * glob (1) beats "any table" (0), and naming a verb (1) is more specific than its whole operation.
+ * Ties go to the stricter action, so overlapping rules never open things up: "insert → allow" and
+ * "write on audit_* → deny" tie on an insert into audit_log, and deny wins.
  */
 function specificity(rule: Rule): number {
   const table = rule.tablePattern === null ? 0 : isGlob(rule.tablePattern) ? 1 : 2;
-  return (rule.userId ? 4 : 0) + table;
+  return (rule.userId ? 4 : 0) + table + (isVerbTarget(rule.operation) ? 1 : 0);
 }
 
 export function defaultAction(db: Pick<DatabaseConfig, 'defaultRead' | 'defaultWrite' | 'defaultDdl' | 'defaultAdmin'>, op: Operation): Action {
@@ -49,7 +59,7 @@ export interface AccessDecision {
 /** Pass `userId: null` to see the everyone-baseline. */
 export function decideAccess(rules: Rule[], db: DatabaseConfig, userId: string | null, access: Access): AccessDecision {
   const matching = rules.filter(
-    (r) => r.operation === access.op && (r.userId === null || r.userId === userId) && tableMatches(r.tablePattern, access.table),
+    (r) => targetMatches(r.operation, access) && (r.userId === null || r.userId === userId) && tableMatches(r.tablePattern, access.table),
   );
   if (matching.length === 0) return { access, action: defaultAction(db, access.op), rule: null };
   matching.sort((a, b) => specificity(b) - specificity(a) || RESTRICTIVENESS[b.action] - RESTRICTIVENESS[a.action]);
@@ -78,14 +88,19 @@ export function evaluateAnalysis(rules: Rule[], db: DatabaseConfig, userId: stri
  */
 export function canOnlyRead(rules: Rule[], db: DatabaseConfig, userId: string): boolean {
   for (const op of ['write', 'ddl', 'admin'] as const) {
-    const applicable = rules.filter((r) => r.operation === op && (r.userId === null || r.userId === userId));
-    // The default only applies where no "any table" rule matches.
-    if (!applicable.some((r) => r.tablePattern === null) && defaultAction(db, op) !== 'deny') return false;
+    const applicable = rules.filter((r) => targetOperation(r.operation) === op && (r.userId === null || r.userId === userId));
+    // The default only applies where no whole-operation, any-table rule matches.
+    if (!applicable.some((r) => r.tablePattern === null && r.operation === op) && defaultAction(db, op) !== 'deny') return false;
     const denies = applicable.filter((r) => r.action === 'deny');
     for (const r of applicable) {
       if (r.action === 'deny') continue;
-      // A deny at least as specific, covering every table this rule matches, always wins (ties go to deny).
-      const overridden = denies.some((d) => specificity(d) >= specificity(r) && (d.tablePattern === null || d.tablePattern === r.tablePattern));
+      // A deny at least as specific, covering every table and verb this rule matches, always wins (ties go to deny).
+      const overridden = denies.some(
+        (d) =>
+          specificity(d) >= specificity(r) &&
+          (d.tablePattern === null || d.tablePattern === r.tablePattern) &&
+          (d.operation === op || d.operation === r.operation),
+      );
       if (!overridden) return false;
     }
   }
@@ -95,7 +110,7 @@ export function canOnlyRead(rules: Rule[], db: DatabaseConfig, userId: string): 
 export function grantCovers(grant: Grant, userId: string, access: Access): boolean {
   return (
     (grant.userId === null || grant.userId === userId) &&
-    (grant.operation === null || grant.operation === access.op) &&
+    targetMatches(grant.operation, access) &&
     tableMatches(grant.tablePattern, access.table)
   );
 }

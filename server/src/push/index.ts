@@ -73,9 +73,9 @@ export class PushService {
   }
 }
 
-/** e.g. "Approve write on orders?", "Approve ddl + write on orders, customers +1?" */
+/** e.g. "Approve delete on orders?", "Approve insert + update on orders, customers +1?" */
 export function approvalTitle(approval: Pick<Approval, 'asked'>): string {
-  const ops = [...new Set(approval.asked.map((a) => a.op))];
+  const ops = [...new Set(approval.asked.map((a) => a.verb ?? a.op))];
   const tables = [...new Set(approval.asked.map((a) => a.table).filter((t): t is string => !!t))];
   const on = tables.length ? ` on ${tables.slice(0, 2).join(', ')}${tables.length > 2 ? ` +${tables.length - 2}` : ''}` : '';
   return `Approve ${ops.join(' + ')}${on}?`;

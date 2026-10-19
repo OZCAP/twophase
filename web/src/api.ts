@@ -1,6 +1,19 @@
 export type Action = 'allow' | 'approve' | 'deny';
 export type Operation = 'read' | 'write' | 'ddl' | 'admin';
 export const OPERATIONS: Operation[] = ['read', 'write', 'ddl', 'admin'];
+
+/** The specific statement kinds within each operation (mirrors the server's engines/types.ts). */
+export const VERBS = {
+  read: ['select'],
+  write: ['insert', 'update', 'delete', 'merge', 'truncate', 'lock', 'function', 'call', 'notify', 'refresh'],
+  ddl: ['create', 'alter', 'drop'],
+  admin: ['admin'],
+} as const;
+export type Verb = (typeof VERBS)[Operation][number];
+/** What a rule or trust window targets: a whole operation, or one verb within it. */
+export type PolicyTarget = Operation | Verb;
+export const targetOperation = (t: PolicyTarget): Operation =>
+  (OPERATIONS as string[]).includes(t) ? (t as Operation) : OPERATIONS.find((op) => (VERBS[op] as readonly string[]).includes(t))!;
 export type ApprovalStatus = 'pending' | 'approved' | 'denied' | 'expired' | 'cancelled';
 export type Surface = 'mcp' | 'wire';
 
@@ -83,7 +96,7 @@ export interface Rule extends Named {
   id: string;
   databaseId: string;
   userId: string | null;
-  operation: Operation;
+  operation: PolicyTarget;
   tablePattern: string | null;
   action: Action;
   note: string | null;
@@ -94,7 +107,7 @@ export interface Grant extends Named {
   id: string;
   databaseId: string;
   userId: string | null;
-  operation: Operation | null;
+  operation: PolicyTarget | null;
   tablePattern: string | null;
   expiresAt: string | null;
   approvalId: string | null;
@@ -104,6 +117,8 @@ export interface Grant extends Named {
 
 export interface Access {
   op: Operation;
+  /** Missing on approvals recorded before verbs existed. */
+  verb?: Verb;
   table: string | null;
 }
 
@@ -125,6 +140,7 @@ export interface Approval extends Named {
   statements: StatementAnalysis[];
   asked: Access[];
   operations: Operation[];
+  verbs: Verb[];
   tables: string[];
   estimate: { rows: number | null; plan: string | null; error: string | null } | null;
   session: { applicationName?: string | null; transactionStatus?: 'idle' | 'transaction' | 'failed'; transactionAgeMs?: number | null } | null;
@@ -143,6 +159,7 @@ export interface AuditEntry extends Named {
   surface: Surface;
   sql: string;
   operations: Operation[];
+  verbs: Verb[];
   tables: string[];
   decision: 'allowed' | 'granted' | 'approved' | 'denied' | 'rejected' | 'expired' | 'cancelled';
   ruleId: string | null;
@@ -231,7 +248,7 @@ export class Api {
   deleteRule = (id: string) => this.request<void>('DELETE', `/rules/${id}`);
 
   grants = () => this.request<Grant[]>('GET', '/grants');
-  createGrant = (g: { databaseId: string; userId: string | null; operation: Operation | null; tablePattern: string | null; durationMinutes: number | null }) =>
+  createGrant = (g: { databaseId: string; userId: string | null; operation: PolicyTarget | null; tablePattern: string | null; durationMinutes: number | null }) =>
     this.request<Grant>('POST', '/grants', g);
   revokeGrant = (id: string) => this.request<void>('DELETE', `/grants/${id}`);
 

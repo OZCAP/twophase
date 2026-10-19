@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
-import { defaultKey, OPERATIONS, proxyHost, type Action, type ConnectionTest, type Database, type DatabaseDraft, type Operation, type Rule, type TableInfo } from '../api';
+import { defaultKey, OPERATIONS, proxyHost, VERBS, type Action, type ConnectionTest, type Database, type DatabaseDraft, type Operation, type PolicyTarget, type Rule, type TableInfo, type Verb } from '../api';
 import { go, useProxy } from '../state';
-import { ActionBadge, ActionPicker, attempt, CopyButton, Empty, Modal, OP_DESCRIPTION, OpChip } from '../ui';
+import { ACTION_LABEL, ActionBadge, ActionPicker, attempt, CopyButton, Empty, Modal, OP_DESCRIPTION, OP_LABEL, OpChip, VERB_DESCRIPTION, VERB_LABEL } from '../ui';
 
 export function DatabasesView({ databaseId }: { databaseId?: string }) {
   const { databases } = useProxy();
@@ -86,6 +86,18 @@ function DatabaseDetail({ db }: { db: Database }) {
       await load();
     });
 
+  /** A verb default is an everyone, any-table rule for that verb; "Default" removes it. */
+  const verbRule = (verb: Verb) => rules.find((r) => r.userId === null && r.tablePattern === null && r.operation === verb);
+  const setVerbDefault = (verb: Verb, action: Action | null) =>
+    attempt(async () => {
+      const existing = verbRule(verb);
+      if (action === null) {
+        if (existing) await api.deleteRule(existing.id);
+      } else if (existing) await api.updateRule(existing.id, { action });
+      else await api.createRule({ databaseId: db.id, userId: null, operation: verb, tablePattern: null, action, note: null });
+      await load();
+    });
+
   const mcpUrl = `${location.origin}/mcp/${db.slug}`;
   const pgEndpoint = `${proxyHost()}:${status?.wire.port ?? 6432}/${db.slug}`;
 
@@ -159,11 +171,31 @@ function DatabaseDetail({ db }: { db: Database }) {
         <p className="muted small">What happens to each kind of statement when no rule matches. Statements are classified with Postgres's own parser.</p>
         <ul className="list">
           {OPERATIONS.map((op) => (
-            <li key={op} className="row tool-row">
-              <div className="grow">
-                <OpChip op={op} /> <span className="muted small">{OP_DESCRIPTION[op]}</span>
+            <li key={op}>
+              <div className="row tool-row" style={{ flexWrap: 'nowrap' }}>
+                <div className="grow">
+                  <OpChip op={op} /> <span className="muted small">{OP_DESCRIPTION[op]}</span>
+                </div>
+                <ActionPicker value={db[defaultKey(op)]} onChange={(a) => setDefault(op, a)} />
               </div>
-              <ActionPicker value={db[defaultKey(op)]} onChange={(a) => setDefault(op, a)} />
+              {(op === 'write' || op === 'ddl') && (
+                <details className="verbs" open={VERBS[op].some((v) => verbRule(v))}>
+                  <summary className="muted small">Fine-tune by statement type</summary>
+                  <ul className="verb-list">
+                    {VERBS[op].map((verb) => {
+                      const rule = verbRule(verb);
+                      return (
+                        <li key={verb} className="row tool-row">
+                          <div className="grow">
+                            <OpChip op={verb} /> <span className="muted small">{VERB_DESCRIPTION[verb]}</span>
+                          </div>
+                          <VerbPicker value={rule?.action ?? null} inherited={db[defaultKey(op)]} onChange={(a) => setVerbDefault(verb, a)} />
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </details>
+              )}
             </li>
           ))}
         </ul>
@@ -431,7 +463,7 @@ function RuleEditor({
 }) {
   const { api } = useProxy();
   const existing = 'id' in rule && rule.id ? (rule as Rule) : null;
-  const [operation, setOperation] = useState<Operation>(rule.operation ?? 'write');
+  const [operation, setOperation] = useState<PolicyTarget>(rule.operation ?? 'write');
   const [table, setTable] = useState(rule.tablePattern ?? '');
   const [userId, setUserId] = useState<string | null>(rule.userId ?? null);
   const [action, setAction] = useState<Action>(rule.action ?? 'approve');
@@ -456,12 +488,21 @@ function RuleEditor({
         }}
       >
         <label>
-          Operation
-          <select value={operation} onChange={(e) => setOperation(e.target.value as Operation)}>
+          Statements
+          <select value={operation} onChange={(e) => setOperation(e.target.value as PolicyTarget)}>
             {OPERATIONS.map((op) => (
-              <option key={op} value={op}>
-                {op === 'ddl' ? 'DDL' : op} — {OP_DESCRIPTION[op]}
-              </option>
+              <optgroup key={op} label={OP_LABEL[op]}>
+                <option value={op}>
+                  {op === 'admin' ? 'admin' : `any ${OP_LABEL[op]}`} — {OP_DESCRIPTION[op]}
+                </option>
+                {op !== 'read' &&
+                  op !== 'admin' &&
+                  VERBS[op].map((verb) => (
+                    <option key={verb} value={verb}>
+                      {VERB_LABEL[verb]} — {VERB_DESCRIPTION[verb]}
+                    </option>
+                  ))}
+              </optgroup>
             ))}
           </select>
         </label>
@@ -515,5 +556,21 @@ function RuleEditor({
         </div>
       </form>
     </Modal>
+  );
+}
+
+/** Allow / Ask / Deny for one verb, or "Default" to follow its operation's setting. */
+function VerbPicker({ value, inherited, onChange }: { value: Action | null; inherited: Action; onChange(a: Action | null): void }) {
+  return (
+    <div className="segmented">
+      <button type="button" className={value === null ? 'on on-inherit' : ''} onClick={() => onChange(null)} title="Use the operation's default">
+        Default ({ACTION_LABEL[inherited]})
+      </button>
+      {(['allow', 'approve', 'deny'] as Action[]).map((a) => (
+        <button key={a} type="button" className={value === a ? `on on-${a}` : ''} onClick={() => onChange(a)}>
+          {ACTION_LABEL[a]}
+        </button>
+      ))}
+    </div>
   );
 }

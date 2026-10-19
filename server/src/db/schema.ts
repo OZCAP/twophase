@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { index, integer, primaryKey, sqliteTable, text } from 'drizzle-orm/sqlite-core';
-import type { Access, Estimate, Operation, StatementAnalysis } from '../engines/types.js';
+import { POLICY_TARGETS, type Access, type Estimate, type Operation, type StatementAnalysis, type Verb } from '../engines/types.js';
 
 // Column names are mapped camelCase → snake_case by `casing: 'snake_case'` (see db/index.ts, drizzle.config.ts).
 
@@ -90,7 +90,8 @@ export const rules = sqliteTable(
       .references(() => databases.id, { onDelete: 'cascade' }),
     /** null = every client */
     userId: text().references(() => users.id, { onDelete: 'cascade' }),
-    operation: text({ enum: ['read', 'write', 'ddl', 'admin'] }).notNull(),
+    /** An operation (`write`) or a verb within one (`delete`). */
+    operation: text({ enum: POLICY_TARGETS as [string, ...string[]] }).$type<(typeof POLICY_TARGETS)[number]>().notNull(),
     /** Table name or glob (`audit_*`, `app.*`); null = any table */
     tablePattern: text(),
     action: text({ enum: ACTIONS }).notNull(),
@@ -110,8 +111,8 @@ export const grants = sqliteTable(
       .references(() => databases.id, { onDelete: 'cascade' }),
     /** null = every client */
     userId: text().references(() => users.id, { onDelete: 'cascade' }),
-    /** null = any operation */
-    operation: text({ enum: ['read', 'write', 'ddl', 'admin'] }),
+    /** An operation or verb; null = anything that asks */
+    operation: text({ enum: POLICY_TARGETS as [string, ...string[]] }).$type<(typeof POLICY_TARGETS)[number]>(),
     /** null = any table */
     tablePattern: text(),
     /** null = until revoked */
@@ -146,6 +147,7 @@ export const approvals = sqliteTable(
     /** The accesses that needed a human (policy said "approve" and no trust window covered them). */
     asked: json<Access[]>().notNull(),
     operations: json<OperationList>().notNull(),
+    verbs: json<Verb[]>().notNull().default([]),
     tables: json<string[]>().notNull(),
     estimate: json<Estimate | null>(),
     session: json<SessionInfo | null>(),
@@ -169,6 +171,7 @@ export const audit = sqliteTable(
     surface: text({ enum: SURFACES }).notNull(),
     sql: text().notNull(),
     operations: json<OperationList>().notNull(),
+    verbs: json<Verb[]>().notNull().default([]),
     tables: json<string[]>().notNull(),
     decision: text({ enum: AUDIT_DECISIONS }).notNull(),
     ruleId: text(),

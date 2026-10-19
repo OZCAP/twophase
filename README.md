@@ -42,10 +42,21 @@ Some things that commonly slip past "read-only" checks are handled explicitly:
 Transaction control and harmless session settings (`BEGIN`, `COMMIT`, `SET search_path`, …)
 always pass.
 
-**Rules** per database match an operation, an optional table name or glob (`orders`,
-`audit_*`, `app.*`) and optionally one client, with the action Allow / Ask / Deny.
+**Rules** per database match an operation or one specific kind of statement, an optional table
+name or glob (`orders`, `audit_*`, `app.*`) and optionally one client, with the action
+Allow / Ask / Deny. The specific kinds are:
+
+| Operation | Statement kinds you can target |
+| --- | --- |
+| write | INSERT (incl. COPY FROM), UPDATE, DELETE, MERGE, TRUNCATE, row locks, side-effecting functions, CALL, NOTIFY, REFRESH |
+| ddl | CREATE, ALTER (incl. RENAME, COMMENT), DROP |
+
+So "INSERT → Allow" with writes left on Ask auto-approves inserts while every UPDATE and DELETE
+still waits for you. An upsert (`INSERT … ON CONFLICT DO UPDATE`) counts as both INSERT and
+UPDATE, because it can change existing rows.
 - **Precedence:** a client-specific rule beats an everyone rule. Then an exact table beats a glob,
-  and a glob beats "any table". Ties go to the stricter action.
+  a glob beats "any table", and naming a statement kind (DELETE) beats its whole operation (write).
+  Ties go to the stricter action, so "INSERT → allow" never overrides "write on audit_* → deny".
 - **Strictest wins:** a statement (or a multi-statement string) gets the strictest decision of
   everything it touches.
 
@@ -56,8 +67,8 @@ approval card shows:
 - warnings: `UPDATE`/`DELETE` without `WHERE`, `TRUNCATE`/`DROP`, an open transaction holding locks.
 
 When approving you can also open a **trust window** for N minutes or until revoked. It covers
-the same operations on the same tables, those operations anywhere in the database, or
-everything on the database. Trust windows apply to the client on both MCP and Postgres, release
+the same kind of statement on the same tables ("DELETE on orders"), that kind of statement
+anywhere in the database ("any DELETE"), or everything on the database. Trust windows apply to the client on both MCP and Postgres, release
 matching statements already waiting, and never override **Deny**.
 
 ### Hosted MCP (agents)

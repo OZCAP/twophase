@@ -1,5 +1,5 @@
 import type { ApprovalService } from './approvals.js';
-import { OPERATION_RANK, type Access, type Analysis, type Estimate, type Operation } from './engines/types.js';
+import { ALL_VERBS, OPERATION_RANK, type Access, type Analysis, type Estimate, type Operation, type Verb } from './engines/types.js';
 import type { EventBus } from './events.js';
 import { evaluateAnalysis, grantsCover } from './policy.js';
 import type { SessionInfo } from './db/schema.js';
@@ -51,11 +51,18 @@ export function operationsOf(analysis: Analysis): Operation[] {
   return [...ops].sort((a, b) => OPERATION_RANK[a] - OPERATION_RANK[b]);
 }
 
+/** Distinct verbs across all accesses, in a stable order (INSERT before DELETE, etc.). */
+export function verbsOf(accesses: Access[]): Verb[] {
+  const seen = new Set(accesses.map((a) => a.verb));
+  return ALL_VERBS.filter((v) => seen.has(v));
+}
+
 export function tablesOf(accesses: Access[]): string[] {
   return [...new Set(accesses.map((a) => a.table).filter((t): t is string => !!t))].sort();
 }
 
-const describeAccess = (a: Access) => `${a.op}${a.table ? ` on ${a.table}` : ''}`;
+/** "delete on orders", "read on secrets", "admin". Reads stay "read": "select on x" says nothing more. */
+const describeAccess = (a: Access) => `${a.op === 'read' || a.verb === a.op ? a.op : a.verb}${a.table ? ` on ${a.table}` : ''}`;
 
 /**
  * Every statement, from every surface, goes through here: policy → trust windows → human approval,
@@ -83,6 +90,7 @@ export class Gate {
     const operations = operationsOf(analysis);
     const accesses = analysis.statements.flatMap((s) => s.accesses);
     const tables = tablesOf(accesses);
+    const verbs = verbsOf(accesses);
 
     if (operations.length === 0) {
       return { allowed: true, decision: 'allowed', approvalId: null, finish: () => {} };
@@ -95,6 +103,7 @@ export class Gate {
         surface: req.surface,
         sql: req.sql,
         operations,
+        verbs,
         tables,
         decision,
         ruleId: extra.ruleId ?? null,
@@ -150,6 +159,7 @@ export class Gate {
         statements: analysis.statements,
         asked: dedupeAccesses(asked),
         operations,
+        verbs: verbsOf(asked),
         tables,
         estimate,
         session: req.session ?? null,
@@ -172,5 +182,5 @@ export class Gate {
 }
 
 function dedupeAccesses(accesses: Access[]): Access[] {
-  return [...new Map(accesses.map((a) => [`${a.op}:${a.table ?? ''}`, a])).values()];
+  return [...new Map(accesses.map((a) => [`${a.op}:${a.verb}:${a.table ?? ''}`, a])).values()];
 }

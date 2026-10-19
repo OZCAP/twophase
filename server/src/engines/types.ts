@@ -9,9 +9,36 @@ export type Operation = (typeof OPERATIONS)[number];
 /** Ordering used to pick the "strictest" operation of a statement. */
 export const OPERATION_RANK: Record<Operation, number> = { read: 0, write: 1, ddl: 2, admin: 3 };
 
-/** One thing a statement does: an operation, on a table (`schema.table` or bare `table`) or on nothing table-specific (null). */
+/**
+ * The specific kind of statement within each operation. Rules and trust windows can target an
+ * operation (all writes) or a verb (only deletes).
+ */
+export const VERBS = {
+  read: ['select'],
+  write: ['insert', 'update', 'delete', 'merge', 'truncate', 'lock', 'function', 'call', 'notify', 'refresh'],
+  ddl: ['create', 'alter', 'drop'],
+  admin: ['admin'],
+} as const satisfies Record<Operation, readonly string[]>;
+export type Verb = (typeof VERBS)[Operation][number];
+export const ALL_VERBS = Object.values(VERBS).flat() as Verb[];
+
+/** What a rule or trust window can target: a whole operation, or one verb within it. */
+export type PolicyTarget = Operation | Verb;
+export const POLICY_TARGETS = [...new Set<PolicyTarget>([...OPERATIONS, ...ALL_VERBS])];
+
+/** The operation a policy target belongs to (`delete` → `write`, `write` → `write`). */
+export function targetOperation(target: PolicyTarget): Operation {
+  if ((OPERATIONS as readonly string[]).includes(target)) return target as Operation;
+  return OPERATIONS.find((op) => (VERBS[op] as readonly string[]).includes(target))!;
+}
+
+/**
+ * One thing a statement does: an operation and the specific verb, on a table (`schema.table` or
+ * bare `table`) or on nothing table-specific (null).
+ */
 export interface Access {
   op: Operation;
+  verb: Verb;
   table: string | null;
 }
 

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { previewSql, type Approval, type DecisionScope, type Grant, type Operation } from '../api';
+import { previewSql, type Approval, type DecisionScope, type Grant, type PolicyTarget } from '../api';
 import { useProxy } from '../state';
-import { attempt, Code, describeAccess, Empty, OP_LABEL, OpChip, relative, TRUST_DURATIONS, useNow } from '../ui';
+import { attempt, Code, describeAccess, Empty, OpChip, relative, targetLabel, TRUST_DURATIONS, useNow } from '../ui';
 
 export function ApprovalsView({ focusId }: { focusId?: string }) {
   const { pending, recent, grants } = useProxy();
@@ -45,7 +45,7 @@ export function ApprovalsView({ focusId }: { focusId?: string }) {
                 <span className={`pill pill-${a.status}`}>{a.status}</span>
                 <div className="grow">
                   <div>
-                    {a.operations.map((op) => (
+                    {(a.verbs?.length ? a.verbs : a.operations).map((op) => (
                       <OpChip key={op} op={op} />
                     ))}{' '}
                     <span className="muted">
@@ -84,7 +84,8 @@ function PendingCard({ approval: a, focused }: { approval: Approval; focused: bo
   const [busy, setBusy] = useState(false);
   const [minutes, setMinutes] = useState<number | null>(10);
   const remaining = Math.max(0, Math.round((new Date(a.expiresAt).getTime() - now) / 1000));
-  const askedOps = [...new Set(a.asked.map((x) => x.op))] as Operation[];
+  // What's being asked, as specifically as we know it: DELETE rather than write.
+  const askedTargets = [...new Set(a.asked.map((x): PolicyTarget => x.verb ?? x.op))];
   const warnings = warningsFor(a);
   const via = a.surface === 'wire' ? `Postgres${a.session?.applicationName ? ` (${a.session.applicationName})` : ''}` : 'MCP';
 
@@ -99,7 +100,7 @@ function PendingCard({ approval: a, focused }: { approval: Approval; focused: bo
       <header className="row">
         <div className="grow">
           <h3>
-            {askedOps.map((op) => (
+            {askedTargets.map((op) => (
               <OpChip key={op} op={op} />
             ))}{' '}
             <span className="mono">{a.asked.map((x) => x.table).filter(Boolean).join(', ') || a.statements.map((s) => s.command).join(', ')}</span>
@@ -171,8 +172,8 @@ function PendingCard({ approval: a, focused }: { approval: Approval; focused: bo
           <button className="btn" disabled={busy} onClick={() => trust('tables')} title="The same operation(s) on the same table(s)">
             {a.asked.map(describeAccess).join(', ')}
           </button>
-          <button className="btn" disabled={busy} onClick={() => trust('operation')} title="These operations on any table of this database">
-            all {askedOps.map((op) => OP_LABEL[op]).join(' + ')}
+          <button className="btn" disabled={busy} onClick={() => trust('operation')} title="The same kind of statement on any table of this database">
+            any {askedTargets.map(targetLabel).join(' + ')}
           </button>
           <button className="btn" disabled={busy} onClick={() => trust('database')} title="Anything that would ask on this database">
             everything on {a.databaseName}
@@ -189,7 +190,7 @@ function PendingCard({ approval: a, focused }: { approval: Approval; focused: bo
 export function GrantRow({ grant: g }: { grant: Grant }) {
   const { api } = useProxy();
   const now = useNow(15_000);
-  const what = g.operation ? OP_LABEL[g.operation] : 'anything that asks';
+  const what = g.operation ? targetLabel(g.operation) : 'anything that asks';
   return (
     <li className="row">
       <div className="grow">

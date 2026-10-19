@@ -100,6 +100,32 @@ describe.skipIf(!available)('hosted MCP against real Postgres', () => {
     await proxy.admin('DELETE', `/rules/${deny.id}`);
   });
 
+  it('verb-level rules: inserts auto-approved, deletes still ask; trust windows stay verb-specific', async () => {
+    const rule = await proxy.admin('POST', '/rules', { databaseId: db.id, operation: 'insert', action: 'allow' });
+    const ins = jsonOf(await query("INSERT INTO customers (email, name) VALUES ('verb@example.com', 'Verb')"));
+    expect(ins.statements[0]).toMatchObject({ command: 'INSERT', rowCount: 1 });
+
+    const del = query("DELETE FROM customers WHERE email = 'verb@example.com'");
+    const pending = await proxy.nextPending();
+    expect(pending).toMatchObject({ verbs: ['delete'], asked: [{ op: 'write', verb: 'delete', table: 'customers' }] });
+    await proxy.admin('POST', `/approvals/${pending.id}/decision`, { decision: 'approve', scope: 'tables', durationMinutes: 5 });
+    await del;
+    const [grant] = await proxy.admin<any[]>('GET', '/grants');
+    expect(grant).toMatchObject({ operation: 'delete', tablePattern: 'customers' });
+
+    // The trust window covers deletes on customers, not updates.
+    const upd = query("UPDATE customers SET name = 'x' WHERE id = 2");
+    const again = await proxy.nextPending();
+    expect(again.verbs).toEqual(['update']);
+    await proxy.admin('POST', `/approvals/${again.id}/decision`, { decision: 'deny' });
+    await upd;
+
+    const audit = await proxy.admin<any[]>('GET', '/audit?limit=5');
+    expect(audit.find((a) => a.sql.startsWith('INSERT INTO customers'))).toMatchObject({ decision: 'allowed', verbs: ['insert'] });
+    await proxy.admin('DELETE', `/grants/${grant.id}`);
+    await proxy.admin('DELETE', `/rules/${rule.id}`);
+  });
+
   it('runs multiple statements atomically: a failure rolls the approved write back', async () => {
     const call = query("UPDATE orders SET status = 'x' WHERE id = 4; SELECT 1/0");
     const pending = await proxy.nextPending();

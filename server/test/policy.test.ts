@@ -29,22 +29,50 @@ describe('tableMatches', () => {
 
 describe('decideAccess', () => {
   it('falls back to the per-operation default', () => {
-    expect(decideAccess([], db, 'u', { op: 'read', table: 'orders' }).action).toBe('allow');
-    expect(decideAccess([], db, 'u', { op: 'write', table: 'orders' }).action).toBe('approve');
-    expect(decideAccess([], db, 'u', { op: 'admin', table: null }).action).toBe('deny');
+    expect(decideAccess([], db, 'u', { op: 'read', verb: 'select', table: 'orders' }).action).toBe('allow');
+    expect(decideAccess([], db, 'u', { op: 'write', verb: 'update', table: 'orders' }).action).toBe('approve');
+    expect(decideAccess([], db, 'u', { op: 'admin', verb: 'admin', table: null }).action).toBe('deny');
   });
 
   it('client-specific beats everyone; exact table beats glob beats any; ties go stricter', () => {
     const rules = [rule('write', 'deny'), rule('write', 'allow', 'orders'), rule('write', 'approve', null, 'u1'), rule('write', 'deny', 'orders', 'u1'), rule('write', 'allow', 'ord*'), rule('write', 'approve', 'ord*')];
-    expect(decideAccess(rules, db, 'u2', { op: 'write', table: 'orders' }).action).toBe('allow');
-    expect(decideAccess(rules, db, 'u2', { op: 'write', table: 'ordinals' }).action).toBe('approve');
-    expect(decideAccess(rules, db, 'u2', { op: 'write', table: 'customers' }).action).toBe('deny');
-    expect(decideAccess(rules, db, 'u1', { op: 'write', table: 'customers' }).action).toBe('approve');
-    expect(decideAccess(rules, db, 'u1', { op: 'write', table: 'orders' }).action).toBe('deny');
+    expect(decideAccess(rules, db, 'u2', { op: 'write', verb: 'update', table: 'orders' }).action).toBe('allow');
+    expect(decideAccess(rules, db, 'u2', { op: 'write', verb: 'update', table: 'ordinals' }).action).toBe('approve');
+    expect(decideAccess(rules, db, 'u2', { op: 'write', verb: 'update', table: 'customers' }).action).toBe('deny');
+    expect(decideAccess(rules, db, 'u1', { op: 'write', verb: 'update', table: 'customers' }).action).toBe('approve');
+    expect(decideAccess(rules, db, 'u1', { op: 'write', verb: 'update', table: 'orders' }).action).toBe('deny');
   });
 
   it('table-specific rules never match table-less accesses', () => {
-    expect(decideAccess([rule('write', 'allow', 'orders')], db, 'u', { op: 'write', table: null }).action).toBe('approve');
+    expect(decideAccess([rule('write', 'allow', 'orders')], db, 'u', { op: 'write', verb: 'update', table: null }).action).toBe('approve');
+  });
+});
+
+describe('verb-level rules', () => {
+  const ins = { op: 'write' as const, verb: 'insert' as const, table: 'orders' };
+  const del = { op: 'write' as const, verb: 'delete' as const, table: 'orders' };
+  it('auto-approve inserts but keep asking for deletes', () => {
+    const rules = [rule('insert', 'allow')];
+    expect(decideAccess(rules, db, 'u', ins).action).toBe('allow');
+    expect(decideAccess(rules, db, 'u', del).action).toBe('approve');
+  });
+  it('a verb rule beats a whole-operation rule at the same scope', () => {
+    const rules = [rule('write', 'deny'), rule('insert', 'allow')];
+    expect(decideAccess(rules, db, 'u', ins).action).toBe('allow');
+    expect(decideAccess(rules, db, 'u', del).action).toBe('deny');
+  });
+  it('a table-scoped deny still wins over a broad verb allow (tie goes stricter)', () => {
+    const rules = [rule('insert', 'allow'), rule('write', 'deny', 'audit_*')];
+    expect(decideAccess(rules, db, 'u', { ...ins, table: 'audit_log' }).action).toBe('deny');
+    expect(decideAccess(rules, db, 'u', ins).action).toBe('allow');
+  });
+  it('trust windows can be verb-specific', () => {
+    const g = { id: 'g', databaseId: 'd', userId: 'u', operation: 'delete' as const, tablePattern: 'orders', expiresAt: null, approvalId: null, note: null, createdAt: new Date(0) };
+    expect(grantsCover([g], 'u', [del])).toBe(true);
+    expect(grantsCover([g], 'u', [{ ...del, verb: 'update' }])).toBe(false);
+  });
+  it('a client denied every write verb individually is still not "read-only" unless all are covered', () => {
+    expect(canOnlyRead([rule('insert', 'deny', null, 'u'), rule('ddl', 'deny', null, 'u')], db, 'u')).toBe(false);
   });
 });
 
@@ -53,8 +81,8 @@ describe('evaluateAnalysis', () => {
     const analysis = {
       error: null,
       statements: [
-        { text: '', command: 'SELECT', kind: 'read' as const, flags: [], accesses: [{ op: 'read' as const, table: 'orders' }] },
-        { text: '', command: 'DELETE', kind: 'write' as const, flags: [], accesses: [{ op: 'write' as const, table: 'audit' }] },
+        { text: '', command: 'SELECT', kind: 'read' as const, flags: [], accesses: [{ op: 'read' as const, verb: 'select' as const, table: 'orders' }] },
+        { text: '', command: 'DELETE', kind: 'write' as const, flags: [], accesses: [{ op: 'write' as const, verb: 'delete' as const, table: 'audit' }] },
       ],
     };
     expect(evaluateAnalysis([], db, 'u', analysis).action).toBe('approve');
@@ -67,7 +95,7 @@ describe('grantsCover', () => {
     id: 'g', databaseId: 'd', userId, operation, tablePattern, expiresAt: null, approvalId: null, note: null, createdAt: new Date(0),
   });
   it('needs every asked access covered', () => {
-    const asked = [{ op: 'write' as const, table: 'orders' }, { op: 'ddl' as const, table: 'orders' }];
+    const asked = [{ op: 'write' as const, verb: 'update' as const, table: 'orders' }, { op: 'ddl' as const, verb: 'alter' as const, table: 'orders' }];
     expect(grantsCover([grant('write', 'orders')], 'u', asked)).toBe(false);
     expect(grantsCover([grant('write', 'orders'), grant('ddl', null)], 'u', asked)).toBe(true);
     expect(grantsCover([grant(null, null)], 'u', asked)).toBe(true);

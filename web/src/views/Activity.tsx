@@ -31,7 +31,7 @@ export function ActivityView() {
                 <span className={`pill pill-${e.decision}`}>{DECISION_LABEL[e.decision]}</span>
                 <div className="grow">
                   <div>
-                    {e.operations.map((op) => (
+                    {(e.verbs?.length ? e.verbs : e.operations).map((op) => (
                       <OpChip key={op} op={op} />
                     ))}{' '}
                     <span className="surface">{e.surface === 'wire' ? 'PG' : 'MCP'}</span>{' '}

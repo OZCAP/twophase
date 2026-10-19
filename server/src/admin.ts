@@ -4,7 +4,7 @@ import { ApprovalError, type ApprovalService } from './approvals.js';
 import { bearerToken, hashToken, issueClientToken, safeEqualHex, usernameFor } from './auth.js';
 import type { Config } from './config.js';
 import type { ExecutorRegistry } from './engines/postgres/executor.js';
-import { OPERATIONS } from './engines/types.js';
+import { OPERATIONS, POLICY_TARGETS } from './engines/types.js';
 import { EVENT_NAMES, type EventBus } from './events.js';
 import { decideAccess } from './policy.js';
 import type { PushService } from './push/index.js';
@@ -34,7 +34,7 @@ class HttpError extends Error {
 }
 
 const action = z.enum(['allow', 'approve', 'deny']);
-const operation = z.enum(OPERATIONS);
+const operation = z.enum(POLICY_TARGETS as [string, ...string[]]).transform((t) => t as (typeof POLICY_TARGETS)[number]);
 
 const databaseFields = z.object({
   slug: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,62}$/, 'lowercase letters, digits, dashes and underscores'),
@@ -229,7 +229,9 @@ export function adminRouter(deps: AdminDeps) {
     res.json(
       tables.map((t) => ({
         ...t,
-        actions: Object.fromEntries(OPERATIONS.filter((op) => op !== 'admin').map((op) => [op, decideAccess(rules, db, userId, { op, table: `${t.schema}.${t.name}` }).action])),
+        actions: Object.fromEntries(
+          (['read', 'write', 'ddl'] as const).map((op) => [op, decideAccess(rules, db, userId, { op, verb: op === 'read' ? 'select' : op === 'write' ? 'update' : 'alter', table: `${t.schema}.${t.name}` }).action]),
+        ),
       })),
     );
   });

@@ -1,5 +1,5 @@
 import { loadModule, parseSync } from 'libpg-query';
-import { OPERATION_RANK, type Access, type Analysis, type Operation, type StatementAnalysis } from '../types.js';
+import { OPERATION_RANK, type Access, type Analysis, type Operation, type StatementAnalysis, type Verb } from '../types.js';
 import { classifyFunction, type FunctionCatalog } from './functions.js';
 
 /**
@@ -142,6 +142,15 @@ const STATEMENT_KINDS: Record<string, { kind: Operation; command: string }> = {
   DoStmt: { kind: 'admin', command: 'DO' },
 };
 
+const WRITE_VERBS: Record<string, Verb> = { TruncateStmt: 'truncate', LockStmt: 'lock', NotifyStmt: 'notify', CallStmt: 'call', RefreshMatViewStmt: 'refresh' };
+
+/** The verb of a mapped statement: writes by type, DDL by its leading keyword, admin is just admin. */
+function verbFor(type: string, kind: Operation, command: string): Verb {
+  if (kind === 'write') return WRITE_VERBS[type] ?? 'update';
+  if (kind === 'ddl') return command.startsWith('CREATE') ? 'create' : command.startsWith('DROP') ? 'drop' : 'alter';
+  return kind === 'read' ? 'select' : 'admin';
+}
+
 const nodeType = (n: Node) => Object.keys(n)[0];
 
 /** `{relname, schemaname}` → `schema.table` / `table`. */
@@ -185,15 +194,15 @@ class Collector {
 
   constructor(private catalog: FunctionCatalog | null) {}
 
-  table(rv: Node | undefined, op: Operation) {
+  table(rv: Node | undefined, op: Operation, verb: Verb) {
     if (!rv?.relname) return;
     // An unqualified read of a CTE name is the CTE, not a table.
     if (op === 'read' && !rv.schemaname && this.ctes.has(rv.relname)) return;
-    this.accesses.push({ op, table: rangeVarName(rv) });
+    this.accesses.push({ op, verb, table: rangeVarName(rv) });
   }
 
-  plain(op: Operation, reason?: string) {
-    this.accesses.push({ op, table: null });
+  plain(op: Operation, verb: Verb, reason?: string) {
+    this.accesses.push({ op, verb, table: null });
     if (reason) this.reasons.push(reason);
   }
 
@@ -201,7 +210,7 @@ class Collector {
     const parts = stringList(funcname);
     if (parts.length === 0) return;
     const verdict = classifyFunction(parts, this.catalog);
-    if (verdict.op !== 'read') this.plain(verdict.op, verdict.reason);
+    if (verdict.op !== 'read') this.plain(verdict.op, verdict.op === 'admin' ? 'admin' : 'function', verdict.reason);
   }
 
   /** Strictest operation seen. */
@@ -214,9 +223,9 @@ class Collector {
  * Walks any expression/statement subtree. `op` is what a plain table reference here means
  * (read for queries, ddl/admin for the object a DDL/admin statement acts on).
  */
-function walk(node: unknown, op: Operation, c: Collector): void {
+function walk(node: unknown, op: Operation, verb: Verb, c: Collector): void {
   if (Array.isArray(node)) {
-    for (const n of node) walk(n, op, c);
+    for (const n of node) walk(n, op, verb, c);
     return;
   }
   if (!node || typeof node !== 'object') return;
@@ -224,23 +233,23 @@ function walk(node: unknown, op: Operation, c: Collector): void {
     if (!body || typeof body !== 'object') continue;
     // Single-table fields (e.g. AlterTableStmt.relation) hold the RangeVar unwrapped; list items are wrapped.
     if (type !== 'RangeVar' && typeof body.relname === 'string') {
-      c.table(body, op);
+      c.table(body, op, verb);
       continue;
     }
     switch (type) {
       case 'RangeVar':
-        c.table(body, op);
+        c.table(body, op, verb);
         break;
       case 'FuncCall':
         c.func(body.funcname);
-        walk(body.args, 'read', c);
-        walk(body.agg_filter, 'read', c);
-        walk(body.over, 'read', c);
-        walk(body.agg_order, 'read', c);
+        walk(body.args, 'read', 'select', c);
+        walk(body.agg_filter, 'read', 'select', c);
+        walk(body.over, 'read', 'select', c);
+        walk(body.agg_order, 'read', 'select', c);
         break;
       case 'WithClause':
         for (const cte of body.ctes ?? []) if (cte.CommonTableExpr?.ctename) c.ctes.add(cte.CommonTableExpr.ctename);
-        walk(body.ctes, 'read', c);
+        walk(body.ctes, 'read', 'select', c);
         break;
       case 'SelectStmt':
         walkSelect(body, c);
@@ -252,31 +261,36 @@ function walk(node: unknown, op: Operation, c: Collector): void {
         walkDml(type, body, c);
         break;
       default:
-        walk(body, op, c);
+        walk(body, op, verb, c);
     }
   }
 }
 
 function walkSelect(s: Node, c: Collector) {
-  if (s.withClause) walk({ WithClause: s.withClause }, 'read', c);
+  if (s.withClause) walk({ WithClause: s.withClause }, 'read', 'select', c);
   // FOR UPDATE / FOR SHARE takes row locks: treat the locked tables as written.
-  const fromOp: Operation = s.lockingClause?.length ? 'write' : 'read';
-  if (fromOp === 'write') c.flags.add('row_locks');
+  const locks = !!s.lockingClause?.length;
+  if (locks) c.flags.add('row_locks');
   if (s.intoClause) {
-    c.table(s.intoClause.rel, 'ddl');
+    c.table(s.intoClause.rel, 'ddl', 'create');
     c.flags.add('select_into');
   }
-  walk(s.fromClause, fromOp, c);
+  walk(s.fromClause, locks ? 'write' : 'read', locks ? 'lock' : 'select', c);
   const { withClause: _w, fromClause: _f, intoClause: _i, lockingClause: _l, ...rest } = s;
-  walk(rest, 'read', c);
+  walk(rest, 'read', 'select', c);
 }
 
+const DML_VERBS: Record<string, Verb> = { InsertStmt: 'insert', UpdateStmt: 'update', DeleteStmt: 'delete', MergeStmt: 'merge' };
+
 function walkDml(type: string, s: Node, c: Collector) {
-  if (s.withClause) walk({ WithClause: s.withClause }, 'read', c);
-  c.table(s.relation, 'write');
+  if (s.withClause) walk({ WithClause: s.withClause }, 'read', 'select', c);
+  const verb = DML_VERBS[type];
+  c.table(s.relation, 'write', verb);
+  // INSERT … ON CONFLICT DO UPDATE can change existing rows: it is an update too.
+  if (s.onConflictClause?.action === 'ONCONFLICT_UPDATE') c.table(s.relation, 'write', 'update');
   if ((type === 'UpdateStmt' || type === 'DeleteStmt') && !s.whereClause) c.flags.add('no_where');
   const { withClause: _w, relation: _r, ...rest } = s;
-  walk(rest, 'read', c);
+  walk(rest, 'read', 'select', c);
 }
 
 const TXN_COMMANDS: Record<string, string> = {
@@ -299,17 +313,17 @@ function requestsReadWrite(options: Node[] | undefined): boolean {
 
 type Partial = Omit<StatementAnalysis, 'text'>;
 
-function result(command: string, c: Collector, base: Operation, extraFlags: string[] = []): Partial {
+function result(command: string, c: Collector, base: Operation, baseVerb: Verb, extraFlags: string[] = []): Partial {
   const kind = c.strictest(base);
   // Every statement records its own operation even when it touches no table (e.g. SELECT 1).
-  if (!c.accesses.some((a) => a.op === base)) c.accesses.unshift({ op: base, table: null });
+  if (!c.accesses.some((a) => a.op === base)) c.accesses.unshift({ op: base, verb: baseVerb, table: null });
   return { command, kind, accesses: dedupe(c.accesses), flags: [...new Set([...c.flags, ...extraFlags])] };
 }
 
 function dedupe(accesses: Access[]): Access[] {
   const seen = new Set<string>();
   return accesses.filter((a) => {
-    const k = `${a.op}:${a.table ?? ''}`;
+    const k = `${a.op}:${a.verb}:${a.table ?? ''}`;
     return seen.has(k) ? false : (seen.add(k), true);
   });
 }
@@ -319,7 +333,7 @@ function session(command: string, flags: string[] = []): Partial {
 }
 
 function admin(command: string, reason: string): Partial {
-  return { command, kind: 'admin', accesses: [{ op: 'admin', table: null }], flags: [reason] };
+  return { command, kind: 'admin', accesses: [{ op: 'admin', verb: 'admin', table: null }], flags: [reason] };
 }
 
 function classify(stmt: Node, ctx: AnalyzeContext): Partial {
@@ -331,14 +345,14 @@ function classify(stmt: Node, ctx: AnalyzeContext): Partial {
     case 'SelectStmt': {
       walkSelect(s, c);
       const base: Operation = s.intoClause ? 'ddl' : 'read';
-      return result(s.intoClause ? 'SELECT INTO' : 'SELECT', c, base);
+      return result(s.intoClause ? 'SELECT INTO' : 'SELECT', c, base, s.intoClause ? 'create' : 'select');
     }
     case 'InsertStmt':
     case 'UpdateStmt':
     case 'DeleteStmt':
     case 'MergeStmt': {
       walkDml(type, s, c);
-      return result(type.replace('Stmt', '').toUpperCase(), c, 'write');
+      return result(type.replace('Stmt', '').toUpperCase(), c, 'write', DML_VERBS[type]);
     }
     case 'ExplainStmt': {
       const analyze = (s.options ?? []).some((o: Node) => o.DefElem?.defname === 'analyze' && boolArg(o.DefElem.arg) !== false);
@@ -348,18 +362,18 @@ function classify(stmt: Node, ctx: AnalyzeContext): Partial {
         return { ...inner, command: `EXPLAIN ANALYZE ${inner.command}`, flags: [...inner.flags, 'explain_analyze'] };
       }
       // Plain EXPLAIN only plans: reads the catalog for every table the statement mentions.
-      const tables = inner.accesses.filter((a) => a.table).map((a) => ({ op: 'read' as const, table: a.table }));
-      return { command: `EXPLAIN ${inner.command}`, kind: 'read', accesses: dedupe([{ op: 'read', table: null }, ...tables]), flags: [] };
+      const tables = inner.accesses.filter((a) => a.table).map((a) => ({ op: 'read' as const, verb: 'select' as const, table: a.table }));
+      return { command: `EXPLAIN ${inner.command}`, kind: 'read', accesses: dedupe([{ op: 'read', verb: 'select', table: null }, ...tables]), flags: [] };
     }
     case 'CopyStmt': {
       if (s.is_program || s.filename) return admin('COPY', s.is_program ? 'copy_program' : 'copy_server_file');
       if (s.is_from) {
-        c.table(s.relation, 'write');
-        return result('COPY FROM STDIN', c, 'write', ['copy']);
+        c.table(s.relation, 'write', 'insert');
+        return result('COPY FROM STDIN', c, 'write', 'insert', ['copy']);
       }
-      if (s.query) walk(s.query, 'read', c);
-      else c.table(s.relation, 'read');
-      return result('COPY TO STDOUT', c, 'read', ['copy']);
+      if (s.query) walk(s.query, 'read', 'select', c);
+      else c.table(s.relation, 'read', 'select');
+      return result('COPY TO STDOUT', c, 'read', 'select', ['copy']);
     }
     case 'DeclareCursorStmt': {
       const inner = classify(s.query, ctx);
@@ -370,7 +384,7 @@ function classify(stmt: Node, ctx: AnalyzeContext): Partial {
     case 'ClosePortalStmt':
       return session('CLOSE');
     case 'VariableShowStmt':
-      return { command: 'SHOW', kind: 'read', accesses: [{ op: 'read', table: null }], flags: [] };
+      return { command: 'SHOW', kind: 'read', accesses: [{ op: 'read', verb: 'select', table: null }], flags: [] };
     case 'VariableSetStmt': {
       const name = String(s.name ?? '').toLowerCase();
       const flags = s.is_local ? ['set_local'] : ['session_setting'];
@@ -421,47 +435,48 @@ function classify(stmt: Node, ctx: AnalyzeContext): Partial {
       if (tableLike.includes(s.removeType)) {
         for (const obj of s.objects ?? []) {
           const parts = stringList(obj.List?.items);
-          if (parts.length) c.accesses.push({ op: 'ddl', table: parts.join('.') });
+          if (parts.length) c.accesses.push({ op: 'ddl', verb: 'drop', table: parts.join('.') });
         }
       }
       const flags = ['destructive', ...(s.concurrent ? ['no_transaction'] : [])];
-      return result(`DROP ${String(s.removeType ?? '').replace('OBJECT_', '').replace('_', ' ')}`.trim(), c, k.kind, flags);
+      return result(`DROP ${String(s.removeType ?? '').replace('OBJECT_', '').replace('_', ' ')}`.trim(), c, k.kind, 'drop', flags);
     }
     case 'TruncateStmt': {
-      for (const r of s.relations ?? []) c.table(r.RangeVar, 'write');
-      return result('TRUNCATE', c, 'write', ['destructive']);
+      for (const r of s.relations ?? []) c.table(r.RangeVar, 'write', 'truncate');
+      return result('TRUNCATE', c, 'write', 'truncate', ['destructive']);
     }
     case 'ViewStmt': {
-      c.table(s.view, 'ddl');
-      walk(s.query, 'read', c);
-      return result(STATEMENT_KINDS.ViewStmt.command, c, 'ddl');
+      c.table(s.view, 'ddl', 'create');
+      walk(s.query, 'read', 'select', c);
+      return result(STATEMENT_KINDS.ViewStmt.command, c, 'ddl', 'create');
     }
     case 'CreateTableAsStmt': {
-      c.table(s.into?.rel, 'ddl');
-      walk(s.query, 'read', c);
-      return result(s.objtype === 'OBJECT_MATVIEW' ? 'CREATE MATERIALIZED VIEW' : 'CREATE TABLE AS', c, 'ddl');
+      c.table(s.into?.rel, 'ddl', 'create');
+      walk(s.query, 'read', 'select', c);
+      return result(s.objtype === 'OBJECT_MATVIEW' ? 'CREATE MATERIALIZED VIEW' : 'CREATE TABLE AS', c, 'ddl', 'create');
     }
     case 'IndexStmt': {
-      c.table(s.relation, 'ddl');
-      walk(s.whereClause, 'read', c);
-      walk(s.indexParams, 'read', c);
-      return result('CREATE INDEX', c, 'ddl', s.concurrent ? ['no_transaction'] : []);
+      c.table(s.relation, 'ddl', 'create');
+      walk(s.whereClause, 'read', 'select', c);
+      walk(s.indexParams, 'read', 'select', c);
+      return result('CREATE INDEX', c, 'ddl', 'create', s.concurrent ? ['no_transaction'] : []);
     }
     case 'VacuumStmt': {
-      for (const r of s.rels ?? []) c.table(r.VacuumRelation?.relation, 'admin');
-      return result(s.is_vacuumcmd ? 'VACUUM' : 'ANALYZE', c, 'admin', ['no_transaction']);
+      for (const r of s.rels ?? []) c.table(r.VacuumRelation?.relation, 'admin', 'admin');
+      return result(s.is_vacuumcmd ? 'VACUUM' : 'ANALYZE', c, 'admin', 'admin', ['no_transaction']);
     }
     case 'ReindexStmt': {
-      c.table(s.relation, 'admin');
-      return result('REINDEX', c, 'admin', ['no_transaction']);
+      c.table(s.relation, 'admin', 'admin');
+      return result('REINDEX', c, 'admin', 'admin', ['no_transaction']);
     }
   }
 
   const mapped = STATEMENT_KINDS[type];
   if (!mapped) return admin(type.replace(/Stmt$/, '').toUpperCase(), 'unrecognized_statement');
   // Generic: the objects a DDL/admin statement names get its operation; subqueries in it are reads.
-  walk(s, mapped.kind, c);
-  return result(mapped.command, c, mapped.kind, mapped.kind === 'admin' ? [] : []);
+  const verb = verbFor(type, mapped.kind, mapped.command);
+  walk(s, mapped.kind, verb, c);
+  return result(mapped.command, c, mapped.kind, verb);
 }
 
 /** Byte offsets from the parser index UTF-8 bytes; slice on bytes, not UTF-16 code units. */
@@ -478,7 +493,7 @@ export function analyze(sql: string, ctx: AnalyzeContext = {}): Analysis {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return {
-      statements: [{ text: sql.trim(), command: 'UNPARSEABLE', kind: 'admin', accesses: [{ op: 'admin', table: null }], flags: ['unparseable'] }],
+      statements: [{ text: sql.trim(), command: 'UNPARSEABLE', kind: 'admin', accesses: [{ op: 'admin', verb: 'admin', table: null }], flags: ['unparseable'] }],
       error: message,
     };
   }

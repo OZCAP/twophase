@@ -1,4 +1,4 @@
-import type { Access } from './engines/types.js';
+import type { Access, PolicyTarget } from './engines/types.js';
 import type { EventBus } from './events.js';
 import { grantsCover } from './policy.js';
 import type { PushService } from './push/index.js';
@@ -10,8 +10,8 @@ export interface DecisionInput {
   decision: 'approve' | 'deny';
   /**
    * `once`: only this statement. Otherwise also open a trust window for this client:
-   * `tables`: the same operation(s) on the same table(s); `operation`: those operation(s) on any
-   * table of this database; `database`: anything that would ask on this database.
+   * `tables`: the same verb(s) on the same table(s), e.g. "delete on orders"; `operation`: those
+   * verb(s) on any table of this database, e.g. "all deletes"; `database`: anything that would ask.
    */
   scope?: DecisionScope;
   /** Length of the trust window. null/undefined = until revoked. */
@@ -28,11 +28,13 @@ export class ApprovalError extends Error {
 }
 
 /** Trust windows needed to cover `asked` at the given scope. */
-export function grantsForScope(scope: Exclude<DecisionScope, 'once'>, asked: Access[]): { operation: Access['op'] | null; tablePattern: string | null }[] {
+export function grantsForScope(scope: Exclude<DecisionScope, 'once'>, asked: Access[]): { operation: PolicyTarget | null; tablePattern: string | null }[] {
   const unique = <T>(items: T[], key: (t: T) => string) => [...new Map(items.map((i) => [key(i), i])).values()];
+  // Older approvals stored no verb; fall back to the whole operation for those.
+  const target = (a: Access): PolicyTarget => a.verb ?? a.op;
   if (scope === 'database') return [{ operation: null, tablePattern: null }];
-  if (scope === 'operation') return unique(asked, (a) => a.op).map((a) => ({ operation: a.op, tablePattern: null }));
-  return unique(asked, (a) => `${a.op}:${a.table}`).map((a) => ({ operation: a.op, tablePattern: a.table }));
+  if (scope === 'operation') return unique(asked, target).map((a) => ({ operation: target(a), tablePattern: null }));
+  return unique(asked, (a) => `${target(a)}:${a.table}`).map((a) => ({ operation: target(a), tablePattern: a.table }));
 }
 
 /**

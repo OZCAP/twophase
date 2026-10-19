@@ -38,7 +38,7 @@ function unsupportedOverMcp(s: StatementAnalysis): string | null {
 }
 
 const synthetic = (command: string, table: string | null): Analysis => ({
-  statements: [{ text: command, command, kind: 'read', accesses: [{ op: 'read', table }], flags: [] }],
+  statements: [{ text: command, command, kind: 'read', accesses: [{ op: 'read', verb: 'select', table }], flags: [] }],
   error: null,
 });
 
@@ -163,7 +163,7 @@ export function createDatabaseMcpServer(databaseId: string, userId: string, deps
       return guarded(extra, { db, user, sql: `-- list_tables(${schema ?? ''})`, analysis: synthetic('LIST TABLES', null) }, async (outcome) => {
         const rules = store.listRules({ databaseId: db.id });
         const visible = (await executors.get(db).listTables(schema)).filter(
-          (t) => decideAccess(rules, db, user.id, { op: 'read', table: `${t.schema}.${t.name}` }).action !== 'deny',
+          (t) => decideAccess(rules, db, user.id, { op: 'read', verb: 'select', table: `${t.schema}.${t.name}` }).action !== 'deny',
         );
         outcome.finish({ rowCount: visible.length });
         return ok({ tables: visible });

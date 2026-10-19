@@ -182,7 +182,7 @@ describe.skipIf(!available)('Postgres wire listener against real Postgres', () =
         ]),
       );
       const result = await raw.untilReady();
-      expect(result.errors).toEqual([expect.stringMatching(/^42501: .*write on secrets is not permitted/)]);
+      expect(result.errors).toEqual([expect.stringMatching(/^42501: .*delete on secrets is not permitted/)]);
       expect(result.status).toBe('I');
       expect(await tdb.sql("SELECT count(*)::int AS n FROM customers WHERE email = 'pipelined@example.com'")).toEqual([{ n: 0 }]);
       expect(await tdb.sql('SELECT count(*)::int AS n FROM secrets')).toEqual([{ n: 1 }]);
@@ -193,6 +193,19 @@ describe.skipIf(!available)('Postgres wire listener against real Postgres', () =
       raw.socket.destroy();
       await proxy.admin('DELETE', `/rules/${deny.id}`);
       await proxy.admin('DELETE', `/rules/${allow.id}`);
+    });
+
+    it('verb-level rules apply on the wire: upsert counts as insert + update', async () => {
+      const rule = await proxy.admin('POST', '/rules', { databaseId: db.id, operation: 'insert', action: 'allow' });
+      const c = await connect();
+      expect((await c.query("INSERT INTO customers (email, name) VALUES ('wire-verb@example.com', 'W')")).rowCount).toBe(1);
+      // ON CONFLICT DO UPDATE may rewrite existing rows, so it still asks for the update part.
+      const upsert = c.query("INSERT INTO customers (email, name) VALUES ('wire-verb@example.com', 'W2') ON CONFLICT (email) DO UPDATE SET name = excluded.name");
+      const a = await decideNext('deny');
+      expect(a.verbs).toEqual(['update']);
+      await expect(upsert).rejects.toMatchObject({ code: '42501' });
+      await c.end();
+      await proxy.admin('DELETE', `/rules/${rule.id}`);
     });
 
     it('a cancel request (Ctrl+C) withdraws a held statement', async () => {

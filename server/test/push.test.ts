@@ -107,7 +107,7 @@ describe.skipIf(!available)('web push', () => {
     expect(sub.decrypt(msg.body)).toMatchObject({
       type: 'approval',
       approvalId: pending.id,
-      title: 'Approve write on orders?',
+      title: 'Approve update on orders?',
       body: "agent via MCP → Shop\nUPDATE orders SET status = 'paid' WHERE id = 1",
       url: `/#/approvals/${pending.id}`,
     });
