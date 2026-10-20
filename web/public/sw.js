@@ -1,7 +1,7 @@
 /* Service worker: receives Web Push for approvals and lets you approve/deny from the notification. */
 
 /** Bump when this file changes, so diagnostics show which worker a device is running. */
-const SW_VERSION = 'nav-6';
+const SW_VERSION = 'nav-7';
 const ICON = '/icons/icon-192.png';
 const BADGE = '/icons/badge-96.png';
 
@@ -143,6 +143,9 @@ async function openApp(url) {
   const focus = await win.focus().then(() => 'ok', (e) => String(e));
 
   if (await acked) return log('navigated by page', { focus });
+  // The page clears the stored target when it navigates: if it's gone, the ack was just lost on the way.
+  const stored = await kv('readonly', (s) => s.get('pendingNavigation')).catch(() => undefined);
+  if (stored?.nonce !== nonce) return log('navigated by page (no ack)', { focus });
   // No page answered: load the URL in the window directly.
   const navigated = await win.navigate(target).then((c) => (c ? c.url : 'null client'), (e) => `failed: ${e}`);
   return log('client.navigate', { focus, result: navigated });
