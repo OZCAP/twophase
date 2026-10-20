@@ -10,6 +10,7 @@
   --allow: #15803d;
   --approve: #c2410c;
   --deny: #dc2626;
+  --soon: #ca8a04;
   --radius: 10px;
   font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
   font-size: 15px;
@@ -30,6 +31,7 @@
     --allow: #4ade80;
     --approve: #fb923c;
     --deny: #f87171;
+    --soon: #facc15;
   }
 }
 
@@ -140,6 +142,7 @@ label.check input { width: auto; }
 .trust { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 4px 8px; border: 1px dashed var(--border); border-radius: 8px; }
 .trust select { padding: 5px 8px; }
 .countdown { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--muted); }
+.countdown.soon { color: var(--soon); }
 .countdown.urgent { color: var(--deny); }
 
 /* modal & toast */

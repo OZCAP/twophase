@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ENGINE_LABEL, previewSql, type Approval, type DecisionScope, type Grant, type PolicyTarget } from '../api';
 import { useProxy } from '../state';
-import { attempt, clock, Code, describeAccess, Empty, OpChip, relative, targetLabel, TRUST_DURATIONS, useNow } from '../ui';
+import { attempt, clock, Code, countdownClass, describeAccess, Empty, OpChip, relative, targetLabel, TRUST_DURATIONS, useNow } from '../ui';
 
 export function ApprovalsView({ focusId }: { focusId?: string }) {
   const { api, pending, recent, grants } = useProxy();
@@ -175,7 +175,7 @@ function PendingCard({ approval: a, focused }: { approval: Approval; focused: bo
             <strong>{a.userName}</strong> via {via} → {a.databaseName} · {relative(a.createdAt, now)}
           </div>
         </div>
-        <span className={`countdown ${remaining < 30 ? 'urgent' : ''}`}>
+        <span className={countdownClass(remaining)}>
           {clock(remaining)}
         </span>
       </header>
@@ -269,7 +269,7 @@ export function GrantRow({ grant: g }: { grant: Grant }) {
             'until revoked'
           ) : (
             <>
-              <span className={`countdown ${remaining < 60 ? 'urgent' : ''}`}>{clock(remaining)}</span> left
+              <span className={countdownClass(remaining)}>{clock(remaining)}</span> left
             </>
           )}
         </div>

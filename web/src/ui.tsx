@@ -182,6 +182,11 @@ export function clock(seconds: number): string {
   return `${m}:${pad(sec)}`;
 }
 
+/** Countdown colour: yellow in the last two minutes, red in the last one. */
+export function countdownClass(seconds: number): string {
+  return `countdown ${seconds < 60 ? 'urgent' : seconds < 120 ? 'soon' : ''}`;
+}
+
 /** Re-renders every `ms` so relative times and countdowns stay current. */
 export function useNow(ms = 1000): number {
   const [now, setNow] = useState(Date.now());
