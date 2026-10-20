@@ -97,21 +97,43 @@ async function workerState() {
 
 /**
  * Last resort when no notification tap reached the page (iOS may not run the worker's click
- * handler, or still be running an old worker): a pending approval that arrived while the app was
- * away and whose notification is no longer showing is the one that was tapped, so open it.
+ * handler, or still be running an old worker): open the newest pending approval that arrived while
+ * the app was away, preferring one whose notification is gone (the one that was tapped).
  */
 async function openTappedApproval(since: number) {
   if (Date.now() - navigatedAt < 10_000 || /^#\/approvals\/./.test(location.hash)) return;
   const token = localStorage.getItem('twophase-admin-token');
   const res = await fetch('/admin/api/approvals?status=pending&limit=20', { headers: token ? { authorization: `Bearer ${token}` } : {} });
   if (!res.ok) return;
-  const pending = ((await res.json()) as { id: string; createdAt: string }[]).filter((a) => Date.parse(a.createdAt) >= since - 5000);
+  const pending = ((await res.json()) as { id: string; createdAt: string }[])
+    .filter((a) => Date.parse(a.createdAt) >= since - 5000)
+    .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   if (pending.length === 0) return;
   const reg = await navigator.serviceWorker?.getRegistration().catch(() => undefined);
   const shown = new Set(((await reg?.getNotifications().catch(() => [])) ?? []).map((n) => n.tag));
-  const tapped = pending.filter((a) => !shown.has(`approval:${a.id}`)).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-  if (!tapped || Date.now() - navigatedAt < 10_000) return;
+  const tapped = pending.find((a) => !shown.has(`approval:${a.id}`)) ?? pending[0];
+  if (Date.now() - navigatedAt < 10_000 || /^#\/approvals\/./.test(location.hash)) return;
   handleNavigate({ url: `/#/approvals/${tapped.id}` }, 'guess');
+}
+
+/** Reload into the latest build if this page is older than what the server now serves. */
+async function reloadIfStale(): Promise<boolean> {
+  const res = await fetch('/version.json', { cache: 'no-store' }).catch(() => undefined);
+  const build = res?.ok ? ((await res.json().catch(() => null)) as { build?: string } | null)?.build : undefined;
+  if (!build || build === __BUILD_TIME__) return false;
+  clientLog('reload (stale build)', { from: __BUILD_TIME__, to: build });
+  reloading = true;
+  location.reload();
+  return true;
+}
+
+/** When the app was last put in the background; kept across reloads so a reload still finds the tapped approval. */
+const HIDDEN_AT_KEY = 'twophase-hidden-at';
+let reloading = false;
+function awaySince(): number {
+  const saved = Number(sessionStorage.getItem(HIDDEN_AT_KEY));
+  // A cold start (or a long-ago value) counts approvals from the last two minutes.
+  return saved && Date.now() - saved < 10 * 60_000 ? saved : Date.now() - 2 * 60_000;
 }
 
 /** Ask the browser to fetch sw.js now: iOS rarely checks for a new worker on its own. */
@@ -131,20 +153,22 @@ export async function registerServiceWorker() {
   channel?.addEventListener('message', (e) => {
     if (e.data?.type === 'navigate' && typeof e.data.url === 'string') handleNavigate(e.data, 'broadcast');
   });
-  let hiddenAt = Date.now() - 2 * 60_000; // a cold start counts approvals from the last two minutes
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
-      hiddenAt = Date.now();
+      if (!reloading) sessionStorage.setItem(HIDDEN_AT_KEY, String(Date.now()));
       return;
     }
-    const since = hiddenAt;
+    const since = awaySince();
     lookForPendingNavigation('pending (visible)');
-    setTimeout(() => void openTappedApproval(since).catch(() => {}), 2000);
+    void reloadIfStale().then((stale) => {
+      if (!stale) setTimeout(() => void openTappedApproval(since).catch(() => {}), 1500);
+    });
     void updateWorker().then(() => workerState().then((w) => clientLog('visible', w)));
   });
   window.addEventListener('focus', () => lookForPendingNavigation('pending (focus)'));
   lookForPendingNavigation('pending (load)');
-  setTimeout(() => void openTappedApproval(hiddenAt).catch(() => {}), 2000);
+  const since = awaySince();
+  setTimeout(() => void openTappedApproval(since).catch(() => {}), 1500);
   await navigator.serviceWorker.register('/sw.js');
   await updateWorker();
   void workerState().then((w) => clientLog('load', { standalone: isStandalone, ...w }));
