@@ -172,6 +172,16 @@ export function relative(iso: string, now = Date.now()): string {
   return rtf.format(Math.round(s / 86400), 'day');
 }
 
+/** Seconds as a ticking clock: 4:05, 1:02:03, or 2d 01:02:03. */
+export function clock(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const [d, h, m, sec] = [Math.floor(s / 86400), Math.floor((s % 86400) / 3600), Math.floor((s % 3600) / 60), s % 60];
+  if (d) return `${d}d ${pad(h)}:${pad(m)}:${pad(sec)}`;
+  if (h) return `${h}:${pad(m)}:${pad(sec)}`;
+  return `${m}:${pad(sec)}`;
+}
+
 /** Re-renders every `ms` so relative times and countdowns stay current. */
 export function useNow(ms = 1000): number {
   const [now, setNow] = useState(Date.now());

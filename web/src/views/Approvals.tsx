@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { ENGINE_LABEL, previewSql, type Approval, type DecisionScope, type Grant, type PolicyTarget } from '../api';
 import { useProxy } from '../state';
-import { attempt, Code, describeAccess, Empty, OpChip, relative, targetLabel, TRUST_DURATIONS, useNow } from '../ui';
+import { attempt, clock, Code, describeAccess, Empty, OpChip, relative, targetLabel, TRUST_DURATIONS, useNow } from '../ui';
 
 export function ApprovalsView({ focusId }: { focusId?: string }) {
   const { api, pending, recent, grants } = useProxy();
@@ -176,7 +176,7 @@ function PendingCard({ approval: a, focused }: { approval: Approval; focused: bo
           </div>
         </div>
         <span className={`countdown ${remaining < 30 ? 'urgent' : ''}`}>
-          {Math.floor(remaining / 60)}:{String(remaining % 60).padStart(2, '0')}
+          {clock(remaining)}
         </span>
       </header>
 
@@ -255,15 +255,24 @@ function PendingCard({ approval: a, focused }: { approval: Approval; focused: bo
 
 export function GrantRow({ grant: g }: { grant: Grant }) {
   const { api } = useProxy();
-  const now = useNow(15_000);
+  const now = useNow();
   const what = g.operation ? targetLabel(g.operation) : 'anything that asks';
+  const remaining = g.expiresAt ? (new Date(g.expiresAt).getTime() - now) / 1000 : null;
   return (
     <li className="row">
       <div className="grow">
         <div>
           <strong>{g.userName ?? 'Everyone'}</strong> may {what} on <span className="mono">{g.tablePattern ?? 'any table'}</span> in {g.databaseName}
         </div>
-        <div className="muted small">{g.expiresAt ? `expires ${relative(g.expiresAt, now)}` : 'until revoked'}</div>
+        <div className="muted small">
+          {remaining === null ? (
+            'until revoked'
+          ) : (
+            <>
+              <span className={`countdown ${remaining < 60 ? 'urgent' : ''}`}>{clock(remaining)}</span> left
+            </>
+          )}
+        </div>
       </div>
       <button className="btn small deny" onClick={() => attempt(() => api.revokeGrant(g.id))}>
         Revoke

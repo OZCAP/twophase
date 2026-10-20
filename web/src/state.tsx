@@ -152,6 +152,15 @@ export function ProxyProvider({ token, onLogout, children }: { token: string; on
     return () => ctrl.abort();
   }, [api, refreshApprovals, resolved, resumed]);
 
+  // Trust windows end on their own (the server emits nothing): drop each one as it expires.
+  useEffect(() => {
+    const ends = grants.flatMap((g) => (g.expiresAt ? [Date.parse(g.expiresAt)] : []));
+    if (ends.length === 0) return;
+    const delay = Math.min(Math.max(0, Math.min(...ends) - Date.now()) + 50, 2 ** 31 - 1);
+    const t = setTimeout(() => setGrants((cur) => cur.filter((g) => !g.expiresAt || Date.parse(g.expiresAt) > Date.now())), delay);
+    return () => clearTimeout(t);
+  }, [grants]);
+
   useEffect(() => {
     document.title = pending.length ? `(${pending.length}) Twophase` : 'Twophase';
   }, [pending.length]);
