@@ -1,6 +1,9 @@
 import { createApp } from './app.js';
 import { loadConfig } from './config.js';
 
+// Everything the proxy writes (database, WAL, backups) is private to its own user.
+process.umask(0o077);
+
 const config = loadConfig();
 const proxy = createApp(config);
 const { wirePort, mysqlWirePort } = await proxy.listen();

@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { migrate } from 'drizzle-orm/better-sqlite3/migrator';
-import { mkdirSync } from 'node:fs';
+import { chmodSync, mkdirSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as schema from './schema.js';
@@ -12,8 +12,9 @@ const MIGRATIONS_DIR = fileURLToPath(new URL('../../drizzle', import.meta.url));
 export function openDatabase(dataDir: string) {
   let file = ':memory:';
   if (dataDir !== ':memory:') {
-    mkdirSync(dataDir, { recursive: true });
+    mkdirSync(dataDir, { recursive: true, mode: 0o700 });
     file = path.join(dataDir, 'proxy.db');
+    lockDown(dataDir);
   }
   const sqlite = new Database(file);
   sqlite.pragma('journal_mode = WAL');
@@ -21,6 +22,22 @@ export function openDatabase(dataDir: string) {
   const db = drizzle(sqlite, { schema, casing: 'snake_case' });
   migrate(db, { migrationsFolder: MIGRATIONS_DIR });
   return { db, sqlite };
+}
+
+/**
+ * The database holds upstream passwords and VAPID keys: only the proxy's own user may read it.
+ * Tightens the directory and any files already in it (e.g. created before this was enforced).
+ */
+function lockDown(dataDir: string) {
+  try {
+    chmodSync(dataDir, 0o700);
+    for (const name of readdirSync(dataDir)) {
+      const p = path.join(dataDir, name);
+      chmodSync(p, statSync(p).isDirectory() ? 0o700 : 0o600);
+    }
+  } catch (err) {
+    console.warn(`[data] could not restrict permissions on ${dataDir}:`, err instanceof Error ? err.message : err);
+  }
 }
 
 export type Db = ReturnType<typeof openDatabase>['db'];
