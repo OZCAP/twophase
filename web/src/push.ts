@@ -8,13 +8,36 @@ export const isIos = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.
 export const isStandalone =
   window.matchMedia('(display-mode: standalone)').matches || (navigator as { standalone?: boolean }).standalone === true;
 
+/** How long a tapped notification's target stays valid if the app only wakes up later. */
+const PENDING_NAVIGATION_MS = 5 * 60_000;
+
+function navigateTo(url: string) {
+  const target = new URL(url, location.origin);
+  if (target.origin === location.origin && target.hash && location.hash !== target.hash) location.hash = target.hash;
+}
+
+/** Go where the last tapped notification pointed, if the app hasn't been there yet. */
+async function consumePendingNavigation() {
+  const pending = await kv<{ url: string; at: number }>('readonly', (s) => s.get('pendingNavigation')).catch(() => undefined);
+  if (!pending) return;
+  await kv('readwrite', (s) => s.delete('pendingNavigation')).catch(() => {});
+  if (Date.now() - pending.at < PENDING_NAVIGATION_MS) navigateTo(pending.url);
+}
+
 export async function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
-  await navigator.serviceWorker.register('/sw.js');
-  // The service worker asks an open window to navigate when a notification is tapped.
+  // The service worker asks an open window to navigate when a notification is tapped, and also leaves
+  // the target in IndexedDB in case the message never arrives (iOS) or the app opened at its start URL.
   navigator.serviceWorker.addEventListener('message', (e) => {
-    if (e.data?.type === 'navigate' && typeof e.data.url === 'string') location.hash = new URL(e.data.url, location.origin).hash;
+    if (e.data?.type === 'navigate' && typeof e.data.url === 'string') {
+      navigateTo(e.data.url);
+      void kv('readwrite', (s) => s.delete('pendingNavigation')).catch(() => {});
+    }
   });
+  document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && void consumePendingNavigation());
+  window.addEventListener('focus', () => void consumePendingNavigation());
+  void consumePendingNavigation();
+  await navigator.serviceWorker.register('/sw.js');
 }
 
 // ── admin token for the service worker ──────────────────────

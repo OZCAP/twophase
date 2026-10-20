@@ -263,6 +263,7 @@ export class Api {
   revokeGrant = (id: string) => this.request<void>('DELETE', `/grants/${id}`);
 
   approvals = (status?: ApprovalStatus, limit = 50) => this.request<Approval[]>('GET', `/approvals?limit=${limit}${status ? `&status=${status}` : ''}`);
+  approval = (id: string) => this.request<Approval>('GET', `/approvals/${id}`);
   decide = (id: string, d: Decision) => this.request<Approval>('POST', `/approvals/${id}/decision`, d);
 
   pushConfig = () => this.request<{ vapidPublicKey: string }>('GET', '/push/config');

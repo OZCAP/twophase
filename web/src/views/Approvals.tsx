@@ -4,20 +4,53 @@ import { useProxy } from '../state';
 import { attempt, Code, describeAccess, Empty, OpChip, relative, targetLabel, TRUST_DURATIONS, useNow } from '../ui';
 
 export function ApprovalsView({ focusId }: { focusId?: string }) {
-  const { pending, recent, grants } = useProxy();
+  const { api, pending, recent, grants } = useProxy();
+  const focusedPending = focusId ? pending.find((a) => a.id === focusId) : undefined;
+  // A linked approval that isn't waiting (any more): load it to say what became of it.
+  const [linked, setLinked] = useState<Approval | 'missing' | null>(null);
 
   useEffect(() => {
-    if (focusId) document.getElementById(`approval-${focusId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  }, [focusId, pending.length]);
+    setLinked(null);
+    if (!focusId || focusedPending) return;
+    let cancelled = false;
+    const local = recent.find((a) => a.id === focusId);
+    if (local) setLinked(local);
+    else api.approval(focusId).then((a) => !cancelled && setLinked(a), () => !cancelled && setLinked('missing'));
+    return () => {
+      cancelled = true;
+    };
+  }, [api, focusId, focusedPending, recent]);
 
+  useEffect(() => {
+    if (focusId) window.scrollTo({ top: 0 });
+  }, [focusId]);
+
+  const others = pending.filter((a) => a.id !== focusId);
   return (
     <div className="stack">
+      {focusId && !focusedPending && linked && (
+        <section>
+          {linked === 'missing' ? (
+            <article className="card focused">
+              <h3>Approval not found</h3>
+              <p className="muted">It may have been removed with its database.</p>
+            </article>
+          ) : linked.status === 'pending' ? null : (
+            <ResolvedCard approval={linked} />
+          )}
+        </section>
+      )}
       <section>
         <h2>Waiting for you</h2>
         {pending.length === 0 ? (
           <Empty title="Nothing to approve">Statements that need your approval show up here instantly.</Empty>
         ) : (
-          pending.map((a) => <PendingCard key={a.id} approval={a} focused={a.id === focusId} />)
+          <>
+            {focusedPending && <PendingCard key={focusedPending.id} approval={focusedPending} focused />}
+            {others.map((a) => (
+              <PendingCard key={a.id} approval={a} focused={false} />
+            ))}
+          </>
         )}
       </section>
 
@@ -61,6 +94,38 @@ export function ApprovalsView({ focusId }: { focusId?: string }) {
         )}
       </section>
     </div>
+  );
+}
+
+const STATUS_TEXT: Record<Approval['status'], string> = {
+  pending: 'Waiting',
+  approved: 'Approved',
+  denied: 'Denied',
+  expired: 'Expired: nobody decided in time, so it failed',
+  cancelled: 'Withdrawn by the client before a decision',
+};
+
+/** The approval a notification pointed to, after it was decided. */
+function ResolvedCard({ approval: a }: { approval: Approval }) {
+  const now = useNow();
+  return (
+    <article id={`approval-${a.id}`} className="card focused">
+      <header className="row">
+        <div className="grow">
+          <h3>
+            <span className={`pill pill-${a.status}`}>{a.status}</span>{' '}
+            {(a.verbs?.length ? a.verbs : a.operations).map((op) => (
+              <OpChip key={op} op={op} />
+            ))}{' '}
+            <span className="mono">{a.tables.join(', ')}</span>
+          </h3>
+          <div className="muted">
+            {STATUS_TEXT[a.status]} · {relative(a.decidedAt ?? a.createdAt, now)} · {a.userName} → {a.databaseName}
+          </div>
+        </div>
+      </header>
+      <Code>{a.sql}</Code>
+    </article>
   );
 }
 

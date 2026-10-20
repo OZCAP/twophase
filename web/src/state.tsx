@@ -96,6 +96,19 @@ export function ProxyProvider({ token, onLogout, children }: { token: string; on
     syncPushSubscription(api).catch(() => {});
   }, [api, token, refreshApprovals, refreshDatabases, refreshUsers, onLogout]);
 
+  // Coming back to the app (e.g. from a notification): the event stream may have died while it was
+  // in the background (iOS suspends it), so reconnect, which also refetches pending approvals.
+  const [resumed, setResumed] = useState(0);
+  useEffect(() => {
+    let hiddenAt = 0;
+    const on = () => {
+      if (document.visibilityState === 'hidden') hiddenAt = Date.now();
+      else if (hiddenAt && Date.now() - hiddenAt > 2000) setResumed((n) => n + 1);
+    };
+    document.addEventListener('visibilitychange', on);
+    return () => document.removeEventListener('visibilitychange', on);
+  }, []);
+
   // Live updates with reconnect/backoff; refetch on (re)connect to catch anything missed.
   useEffect(() => {
     const ctrl = new AbortController();
@@ -137,7 +150,7 @@ export function ProxyProvider({ token, onLogout, children }: { token: string; on
       }
     })();
     return () => ctrl.abort();
-  }, [api, refreshApprovals, resolved]);
+  }, [api, refreshApprovals, resolved, resumed]);
 
   useEffect(() => {
     document.title = pending.length ? `(${pending.length}) Twophase` : 'Twophase';

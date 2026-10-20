@@ -90,14 +90,23 @@ async function decide(data, decision) {
   }
 }
 
+/**
+ * Opens the app at `url`. The target is also left in IndexedDB for the page to pick up when it
+ * becomes visible: iOS can drop the message to a suspended app, or open the Home Screen app at its
+ * start URL instead of the one asked for.
+ */
 async function openApp(url) {
+  const target = new URL(url, self.location.origin).href;
+  await kv('readwrite', (s) => s.put({ url: target, at: Date.now() }, 'pendingNavigation')).catch(() => {});
   const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
   const existing = windows.find((w) => new URL(w.url).origin === self.location.origin);
   if (existing) {
-    existing.postMessage({ type: 'navigate', url });
-    return existing.focus();
+    existing.postMessage({ type: 'navigate', url: target });
+    // Focusing needs the tap's user activation; if it's refused, the stored target still applies
+    // the next time the app is shown. Never open a second window over the existing one.
+    return existing.focus().catch(() => {});
   }
-  return self.clients.openWindow(url);
+  return self.clients.openWindow(target);
 }
 
 // Browsers may rotate a subscription; re-register the new one with the proxy.
