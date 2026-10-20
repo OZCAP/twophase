@@ -2,7 +2,6 @@ import type { Config } from '../config.js';
 import { ENGINE_LABELS } from '../engines/index.js';
 import { previewSql } from '../events.js';
 import type { Approval, DatabaseConfig, ProxyUser, Store } from '../store.js';
-import { ApnsSender } from './apns.js';
 import { resolveVapidKeys, WebPushSender, type SendResult } from './webPush.js';
 
 /** Payload the PWA service worker understands (web/public/sw.js). */
@@ -10,18 +9,12 @@ export type WebPushPayload =
   | { type: 'approval'; approvalId: string; title: string; body: string; url: string; expiresAt: string }
   | { type: 'message'; title: string; body: string; url: string };
 
-/** Fans notifications out to every channel: Web Push (PWA) always, APNs when configured. */
+/** Sends notifications to every subscribed device over Web Push (the PWA). */
 export class PushService {
   readonly web: WebPushSender;
-  private apns: ApnsSender | null;
 
   constructor(store: Store, config: Config) {
     this.web = new WebPushSender(store, resolveVapidKeys(store, config.vapid));
-    this.apns = config.apns ? new ApnsSender(store, config.apns) : null;
-  }
-
-  get apnsEnabled() {
-    return this.apns !== null;
   }
 
   async notifyApproval(approval: Approval, db: DatabaseConfig, user: ProxyUser) {
@@ -38,25 +31,7 @@ export class PushService {
       url: `/#/approvals/${approval.id}`,
       expiresAt: approval.expiresAt.toISOString(),
     };
-    await Promise.all([
-      this.web.sendToAll(webPayload, { ttlSeconds, urgency: 'high', topic: approval.id.replaceAll('-', '') }),
-      this.apns?.sendToAll(
-        {
-          aps: {
-            alert: { title, subtitle: who, body: preview },
-            sound: 'default',
-            category: 'APPROVAL_REQUEST',
-            'thread-id': db.id,
-            'interruption-level': 'time-sensitive',
-          },
-          approvalId: approval.id,
-        },
-        {
-          'apns-expiration': String(Math.floor(approval.expiresAt.getTime() / 1000)),
-          'apns-collapse-id': approval.id,
-        },
-      ),
-    ]).catch((err) => console.warn('[push]', err));
+    await this.web.sendToAll(webPayload, { ttlSeconds, urgency: 'high', topic: approval.id.replaceAll('-', '') }).catch((err) => console.warn('[push]', err));
   }
 
   sendTest(): Promise<SendResult> {
@@ -67,10 +42,6 @@ export class PushService {
       url: '/#/settings',
     };
     return this.web.sendToAll(payload, { ttlSeconds: 60, urgency: 'normal' });
-  }
-
-  close() {
-    this.apns?.close();
   }
 }
 

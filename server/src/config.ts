@@ -1,12 +1,5 @@
 import { fileURLToPath } from 'node:url';
 
-export interface ApnsConfig {
-  keyId: string;
-  teamId: string;
-  keyPath: string;
-  bundleId: string;
-}
-
 export interface Config {
   host: string;
   port: number;
@@ -32,20 +25,9 @@ export interface Config {
   mysqlWire: { enabled: boolean; host: string; port: number; publicPort: number };
   /** Web Push (PWA). Keys are generated and persisted on first boot when unset. */
   vapid: { publicKey?: string; privateKey?: string; subject: string };
-  apns: ApnsConfig | null;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
-  const apns =
-    env.APNS_KEY_ID && env.APNS_TEAM_ID && env.APNS_KEY_PATH && env.APNS_BUNDLE_ID
-      ? {
-          keyId: env.APNS_KEY_ID,
-          teamId: env.APNS_TEAM_ID,
-          keyPath: env.APNS_KEY_PATH,
-          bundleId: env.APNS_BUNDLE_ID,
-        }
-      : null;
-
   return {
     host: env.HOST ?? '0.0.0.0',
     port: Number(env.PORT ?? 8787),
@@ -78,6 +60,5 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       privateKey: env.VAPID_PRIVATE_KEY || undefined,
       subject: env.VAPID_SUBJECT ?? 'mailto:admin@example.com',
     },
-    apns,
   };
 }

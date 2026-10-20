@@ -10,17 +10,12 @@ services:
       - "127.0.0.1:3307:3307" # MySQL / MariaDB listener (tailscale serve --tcp=3307 …)
     volumes:
       - proxy-data:/data
-      # - ./AuthKey_XXXXXXXXXX.p8:/secrets/apns.p8:ro
     environment:
       APPROVAL_TIMEOUT_SECONDS: "300"
       WIRE_PORT: "6432"
       MYSQL_WIRE_PORT: "3307"
       # ADMIN_TOKEN: ""            # optional; otherwise generated on first boot and printed to the log
       VAPID_SUBJECT: "mailto:you@example.com" # contact for Web Push services; use a real address
-      # APNS_KEY_ID: ""
-      # APNS_TEAM_ID: ""
-      # APNS_BUNDLE_ID: ""        # must match the iOS app's bundle identifier
-      # APNS_KEY_PATH: /secrets/apns.p8
 
 volumes:
   proxy-data:

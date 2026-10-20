@@ -27,7 +27,6 @@ export type ApprovalInput = Omit<typeof t.approvals.$inferInsert, 'id' | 'create
 export type AuditEntry = typeof t.audit.$inferSelect;
 export type AuditInput = Omit<typeof t.audit.$inferInsert, 'id' | 'ts'>;
 export type PushSubscription = typeof t.pushSubscriptions.$inferSelect;
-export type ApnsDevice = typeof t.apnsDevices.$inferSelect;
 
 const MAX_STORED_SQL = 64 * 1024;
 const capSql = (sql: string) => (sql.length > MAX_STORED_SQL ? `${sql.slice(0, MAX_STORED_SQL)}\n-- [truncated ${sql.length - MAX_STORED_SQL} chars]` : sql);
@@ -317,23 +316,5 @@ export class Store {
 
   deletePushSubscription(endpoint: string): boolean {
     return this.db.delete(t.pushSubscriptions).where(eq(t.pushSubscriptions.endpoint, endpoint)).run().changes > 0;
-  }
-
-  // ── APNs devices (native iOS, later) ──────────────────────
-
-  upsertApnsDevice(token: string, environment: ApnsDevice['environment']) {
-    this.db
-      .insert(t.apnsDevices)
-      .values({ token, environment })
-      .onConflictDoUpdate({ target: t.apnsDevices.token, set: { environment } })
-      .run();
-  }
-
-  listApnsDevices(): ApnsDevice[] {
-    return this.db.select().from(t.apnsDevices).all();
-  }
-
-  deleteApnsDevice(token: string) {
-    this.db.delete(t.apnsDevices).where(eq(t.apnsDevices.token, token)).run();
   }
 }

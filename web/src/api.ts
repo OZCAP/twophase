@@ -187,7 +187,6 @@ export interface ProxyStatus {
   version: string;
   wire: { enabled: boolean; port: number };
   mysqlWire: { enabled: boolean; port: number };
-  apnsEnabled: boolean;
   webPushSubscriptions: number;
   approvalTimeoutSeconds: number;
   pendingApprovals: number;

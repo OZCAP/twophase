@@ -82,7 +82,6 @@ export function createApp(config: Config, overrides: { whois?: Whois } = {}) {
       await mysqlWire?.close();
       await mcp.close();
       await executors.closeAll();
-      push.close();
       store.close();
     },
   };

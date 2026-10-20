@@ -204,13 +204,6 @@ export const pushSubscriptions = sqliteTable('push_subscriptions', {
   lastSuccessAt: timestamp(),
 });
 
-/** Native iOS devices (APNs), for the future native app. */
-export const apnsDevices = sqliteTable('apns_devices', {
-  token: text().primaryKey(),
-  environment: text({ enum: ['sandbox', 'production'] }).notNull(),
-  createdAt: createdAt(),
-});
-
 export const settings = sqliteTable('settings', {
   key: text().primaryKey(),
   value: text().notNull(),

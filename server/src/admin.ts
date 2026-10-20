@@ -99,7 +99,6 @@ const pushSubscription = z.object({
   keys: z.object({ p256dh: z.string().min(1), auth: z.string().min(1) }),
 });
 
-const apnsDevice = z.object({ token: z.string().regex(/^[0-9a-fA-F]{32,200}$/), environment: z.enum(['sandbox', 'production']) });
 
 function parse<T extends z.ZodType>(schema: T, body: unknown): z.output<T> {
   const r = schema.safeParse(body ?? {});
@@ -161,7 +160,6 @@ export function adminRouter(deps: AdminDeps) {
       version: '0.2.0',
       wire: { enabled: config.wire.enabled, port: config.wire.publicPort },
       mysqlWire: { enabled: config.mysqlWire.enabled, port: config.mysqlWire.publicPort },
-      apnsEnabled: push.apnsEnabled,
       webPushSubscriptions: store.listPushSubscriptions().length,
       approvalTimeoutSeconds: config.approvalTimeoutSeconds,
       pendingApprovals: store.listApprovals({ status: 'pending' }).length,
@@ -403,19 +401,6 @@ export function adminRouter(deps: AdminDeps) {
 
   r.get('/client-log', (_req, res) => {
     res.json(clientLog);
-  });
-
-  // ── APNs devices (native iOS app, later) ────────────────
-
-  r.post('/devices', (req, res) => {
-    const body = parse(apnsDevice, req.body);
-    store.upsertApnsDevice(body.token, body.environment);
-    res.status(204).end();
-  });
-
-  r.delete('/devices/:token', (req, res) => {
-    store.deleteApnsDevice(req.params.token);
-    res.status(204).end();
   });
 
   r.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {

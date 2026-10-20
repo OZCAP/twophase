@@ -179,7 +179,6 @@ values. SQL-level `PREPARE … FROM '…'` is judged at `EXECUTE` by what was pr
 | `server/src/engines/index.ts` | engine registry: which executor and listener a database uses |
 | `server/src/` | `gate.ts` (policy → trust windows → approval → audit), `policy.ts`, `approvals.ts`, `mcp/`, `admin.ts`, `push/`, `store.ts` + `db/` (Drizzle ORM / SQLite) |
 | `web/` | React + Vite admin PWA (approvals, databases, clients, activity) with Web Push |
-| `ios/` | Native SwiftUI app: **unfinished**, parked until the web flow is settled |
 
 The core (policy, approvals, audit, UI) only knows operations, verbs and table names. An engine is
 a classifier, an `Executor` (see `engines/types.ts`) and optionally a wire listener.
@@ -279,7 +278,6 @@ to the Home Screen** (Share → Add to Home Screen, open it from there, then Set
 | `WEB_DIR` | `../web/dist` | Built UI to serve at `/` |
 | `VAPID_SUBJECT` | `mailto:admin@example.com` | Contact for push services. **Set this** |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | generated | Optional; keep stable or subscriptions break |
-| `APNS_KEY_ID`, `APNS_TEAM_ID`, `APNS_KEY_PATH`, `APNS_BUNDLE_ID` | — | Native iOS push (for the native app later) |
 
 Per-database settings (in the UI) include the statement timeout, max rows per MCP result, TLS
 mode and an optional read-only login.
