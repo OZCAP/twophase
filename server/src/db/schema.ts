@@ -127,6 +127,11 @@ export const grants = sqliteTable(
   (t) => [index('grants_database_idx').on(t.databaseId)],
 );
 
+/** An access that a trust window already covered, and which window. */
+export interface TrustedAccess extends Access {
+  grantId: string;
+}
+
 export interface SessionInfo {
   applicationName?: string | null;
   transactionStatus?: 'idle' | 'transaction' | 'failed';
@@ -149,6 +154,8 @@ export const approvals = sqliteTable(
     statements: json<StatementAnalysis[]>().notNull(),
     /** The accesses that needed a human (policy said "approve" and no trust window covered them). */
     asked: json<Access[]>().notNull(),
+    /** Accesses the policy would have asked about, but a trust window already covered when the request came in. */
+    trusted: json<TrustedAccess[]>().notNull().default([]),
     operations: json<OperationList>().notNull(),
     verbs: json<Verb[]>().notNull().default([]),
     tables: json<string[]>().notNull(),

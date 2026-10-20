@@ -144,7 +144,7 @@ function warningsFor(a: Approval): { text: string; danger?: boolean }[] {
 }
 
 function PendingCard({ approval: a, focused }: { approval: Approval; focused: boolean }) {
-  const { decide, databases } = useProxy();
+  const { decide, databases, grants } = useProxy();
   const now = useNow();
   const [busy, setBusy] = useState(false);
   const [minutes, setMinutes] = useState<number | null>(10);
@@ -205,6 +205,35 @@ function PendingCard({ approval: a, focused }: { approval: Approval; focused: bo
       <dl className="kv">
         <dt>Needs approval</dt>
         <dd>{a.asked.map(describeAccess).join(', ')}</dd>
+        {a.trusted && a.trusted.length > 0 && (
+          <>
+            <dt>Already trusted</dt>
+            <dd>
+              <ul className="trusted">
+                {a.trusted.map((t) => {
+                  const g = grants.find((x) => x.id === t.grantId);
+                  const left = g?.expiresAt ? (new Date(g.expiresAt).getTime() - now) / 1000 : null;
+                  return (
+                    <li key={`${t.verb}:${t.table}`}>
+                      {describeAccess(t)}{' '}
+                      <span className="muted small">
+                        {!g ? (
+                          '· window ended, approving covers it'
+                        ) : left === null ? (
+                          '· window until revoked'
+                        ) : (
+                          <>
+                            · window <span className={countdownClass(left)}>{clock(left)}</span> left
+                          </>
+                        )}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </dd>
+          </>
+        )}
         {a.estimate && (
           <>
             <dt>Planner estimate</dt>

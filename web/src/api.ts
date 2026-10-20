@@ -148,6 +148,8 @@ export interface Approval extends Named {
   params: (string | null)[] | null;
   statements: StatementAnalysis[];
   asked: Access[];
+  /** What a trust window already covered when the request came in (missing on older approvals). */
+  trusted?: (Access & { grantId: string })[];
   operations: Operation[];
   verbs: Verb[];
   tables: string[];

@@ -1,8 +1,8 @@
 import type { ApprovalService } from './approvals.js';
 import { ALL_VERBS, OPERATION_RANK, type Access, type Analysis, type Estimate, type Operation, type Verb } from './engines/types.js';
 import type { EventBus } from './events.js';
-import { evaluateAnalysis, grantsCover } from './policy.js';
-import type { SessionInfo } from './db/schema.js';
+import { evaluateAnalysis, grantCovers, grantsCover } from './policy.js';
+import type { SessionInfo, TrustedAccess } from './db/schema.js';
 import type { Approval, AuditDecision, DatabaseConfig, ProxyUser, Store, Surface } from './store.js';
 
 export interface GateRequest {
@@ -144,9 +144,17 @@ export class Gate {
     const decidingRule = policy.decisions.find((d) => d.rule)?.rule ?? null;
     if (policy.action === 'allow') return allowed('allowed', null, decidingRule?.id ?? null);
 
-    const asked = policy.decisions.filter((d) => d.action === 'approve').map((d) => d.access);
+    // Ask only about what no trust window covers yet; the rest is shown as already trusted.
     const grants = this.store.listActiveGrants({ databaseId: db.id, userId: user.id });
-    if (grantsCover(grants, user.id, asked)) return allowed('granted', null, null);
+    const asked: Access[] = [];
+    const trusted: TrustedAccess[] = [];
+    for (const { action, access } of policy.decisions) {
+      if (action !== 'approve') continue;
+      const grant = grants.find((g) => grantCovers(g, user.id, access));
+      if (grant) trusted.push({ ...access, grantId: grant.id });
+      else asked.push(access);
+    }
+    if (asked.length === 0) return allowed('granted', null, null);
 
     const estimate = req.estimate && asked.some((a) => a.op === 'write') ? await req.estimate().catch(() => null) : null;
     const approval = await this.approvals.request(
@@ -158,6 +166,7 @@ export class Gate {
         params: req.params ?? null,
         statements: analysis.statements,
         asked: dedupeAccesses(asked),
+        trusted: dedupeAccesses(trusted),
         operations,
         verbs: verbsOf(asked),
         tables,
@@ -181,6 +190,6 @@ export class Gate {
   }
 }
 
-function dedupeAccesses(accesses: Access[]): Access[] {
+function dedupeAccesses<T extends Access>(accesses: T[]): T[] {
   return [...new Map(accesses.map((a) => [`${a.op}:${a.verb}:${a.table ?? ''}`, a])).values()];
 }

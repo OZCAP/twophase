@@ -83,13 +83,36 @@ describe.skipIf(!available)('complex statements against real Postgres', () => {
       await first;
       // Same verbs on the same tables: runs straight away.
       expect(jsonOf(await query(sql.replace('$ID', '10'))).statements[0]).toMatchObject({ command: 'INSERT', rowCount: 1 });
-      // Also writes audit_log, which the window doesn't cover: the whole batch asks again.
+      // Also writes audit_log, which the window doesn't cover: asks again, about that part only,
+      // and shows which window already covers the rest.
       const third = query(`${sql.replace('$ID', '11')}; INSERT INTO audit_log (action, n) VALUES ('x', 1)`);
       const a = await decideNext('deny');
-      expect(a.asked).toContainEqual({ op: 'write', verb: 'insert', table: 'audit_log' });
+      expect(a.asked).toEqual([{ op: 'write', verb: 'insert', table: 'audit_log' }]);
+      expect(a.verbs).toEqual(['insert']);
+      const grants = await proxy.admin<any[]>('GET', '/grants');
+      expect(sorted(a.trusted.map((t: any) => `${t.verb}:${t.table}`))).toEqual(['delete:orders', 'insert:orders_archive']);
+      for (const t of a.trusted) expect(grants.map((g) => g.id)).toContain(t.grantId);
       await third;
       expect(await count('id = 11')).toBe(1);
       for (const g of await proxy.admin<any[]>('GET', '/grants')) await proxy.admin('DELETE', `/grants/${g.id}`);
+    });
+
+    it('a new window for the untrusted part releases the waiting batch; one that lapsed meanwhile does not count', async () => {
+      const window = await proxy.admin('POST', '/grants', { databaseId: db.id, userId: client.user.id, operation: 'delete', tablePattern: 'orders', durationMinutes: 5 });
+      const call = query("DELETE FROM orders WHERE id = 22; INSERT INTO audit_log (action, n) VALUES ('released', 1)");
+      const a = await proxy.nextPending();
+      expect(a.asked).toEqual([{ op: 'write', verb: 'insert', table: 'audit_log' }]);
+      expect(a.trusted).toEqual([{ op: 'write', verb: 'delete', table: 'orders', grantId: window.id }]);
+
+      // Revoking the covering window, then trusting only the asked part, is not enough.
+      await proxy.admin('DELETE', `/grants/${window.id}`);
+      const inserts = await proxy.admin('POST', '/grants', { databaseId: db.id, userId: client.user.id, operation: 'insert', tablePattern: 'audit_log', durationMinutes: 5 });
+      expect((await proxy.admin('GET', `/approvals/${a.id}`)).status).toBe('pending');
+      // Trusting the delete again covers everything: the batch runs without a decision.
+      const deletes = await proxy.admin('POST', '/grants', { databaseId: db.id, userId: client.user.id, operation: 'delete', tablePattern: 'orders', durationMinutes: 5 });
+      expect(jsonOf(await call).statements).toHaveLength(2);
+      expect(await count('id = 22')).toBe(0);
+      for (const g of [inserts, deletes]) await proxy.admin('DELETE', `/grants/${g.id}`);
     });
 
     it('a denied read hidden in a subquery of a write blocks the whole statement without asking', async () => {

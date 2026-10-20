@@ -115,7 +115,8 @@ export class ApprovalService {
       const a = this.store.getApproval(id);
       if (!a || a.databaseId !== databaseId) continue;
       const grants = this.store.listActiveGrants({ databaseId, userId: a.userId });
-      if (grantsCover(grants, a.userId, a.asked)) this.finish(id, 'approved', grants[0]?.id ?? null);
+      // The windows that were already trusted may have ended meanwhile: check everything again.
+      if (grantsCover(grants, a.userId, [...a.asked, ...a.trusted])) this.finish(id, 'approved', grants[0]?.id ?? null);
     }
   }
 

@@ -1,0 +1,1 @@
+ALTER TABLE `approvals` ADD `trusted` text DEFAULT '[]' NOT NULL;
