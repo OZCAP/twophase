@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Api } from '../api';
-import { currentSubscription, disablePush, enablePush, isIos, isStandalone, pushSupported } from '../push';
+import { clearRefreshMarker, currentSubscription, disablePush, enablePush, isIos, isStandalone, pushSupported, refreshApp } from '../push';
 import { useProxy } from '../state';
 import { attempt } from '../ui';
 
@@ -37,6 +37,7 @@ export function SettingsView() {
         </dl>
       </section>
       <PushCard />
+      <AppCard />
       {status?.auth.mode !== 'tailscale' && (
         <button
           className="btn deny"
@@ -51,6 +52,39 @@ export function SettingsView() {
         </button>
       )}
     </div>
+  );
+}
+
+/** Shown once after a refresh, then cleared from the address bar. */
+const justRefreshed = clearRefreshMarker();
+
+function AppCard() {
+  const [busy, setBusy] = useState(false);
+  const built = new Date(__BUILD_TIME__);
+  return (
+    <section className="card">
+      <h3>App</h3>
+      <dl className="facts">
+        <dt>This build</dt>
+        <dd>
+          {built.toLocaleString()} {justRefreshed && <span className="badge badge-allow">just refreshed</span>}
+        </dd>
+      </dl>
+      <p className="muted small">
+        Re-download the app and reload it, to pick up an update right away. Your sign-in and push notifications stay as they are.
+      </p>
+      <button
+        className="btn"
+        style={{ alignSelf: 'flex-start' }}
+        disabled={busy}
+        onClick={() => {
+          setBusy(true);
+          void refreshApp().catch(() => location.reload());
+        }}
+      >
+        {busy ? 'Refreshing…' : 'Refresh app'}
+      </button>
+    </section>
   );
 }
 
@@ -79,7 +113,7 @@ function PushCard() {
     <section className="card">
       <h3>Push notifications</h3>
       <p className="muted small">
-        Get a notification on this device whenever a tool call waits for approval, even when the app is closed. On desktop
+        Get a notification on this device whenever a statement waits for approval, even when the app is closed. On desktop
         and Android you can approve or deny right from the notification.
       </p>
 

@@ -40,6 +40,43 @@ export async function registerServiceWorker() {
   await navigator.serviceWorker.register('/sw.js');
 }
 
+/**
+ * Force the installed app to the latest version: fetch a fresh service worker and let it take
+ * over, drop any cached responses, re-download the page itself (bypassing the HTTP cache), then
+ * reload. The service worker stays registered, so push notifications keep working.
+ */
+export async function refreshApp(): Promise<void> {
+  const reg = await navigator.serviceWorker?.getRegistration().catch(() => undefined);
+  if (reg) {
+    await reg.update().catch(() => {});
+    const incoming = reg.installing ?? reg.waiting;
+    if (incoming) {
+      // sw.js calls skipWaiting() on install; wait (briefly) until it is in charge.
+      await new Promise<void>((resolve) => {
+        const done = () => incoming.state === 'activated' && resolve();
+        incoming.addEventListener('statechange', done);
+        done();
+        setTimeout(resolve, 5000);
+      });
+    }
+  }
+  if ('caches' in window) for (const key of await caches.keys()) await caches.delete(key);
+  await Promise.all(['/', '/index.html', '/sw.js', '/manifest.webmanifest'].map((u) => fetch(u, { cache: 'reload' }).catch(() => {})));
+  // A new query string makes the browser load the page from the network, not memory.
+  const url = new URL(location.href);
+  url.searchParams.set('refreshed', String(Date.now()));
+  location.replace(url.toString());
+}
+
+/** Drop the `?refreshed=` marker left by refreshApp() from the address. */
+export function clearRefreshMarker() {
+  const url = new URL(location.href);
+  if (!url.searchParams.has('refreshed')) return false;
+  url.searchParams.delete('refreshed');
+  history.replaceState(history.state, '', url.toString());
+  return true;
+}
+
 // ── admin token for the service worker ──────────────────────
 // The worker can't read localStorage; it reads the token from IndexedDB to approve/deny from a notification.
 
