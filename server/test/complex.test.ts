@@ -115,6 +115,30 @@ describe.skipIf(!available)('complex statements against real Postgres', () => {
       for (const g of [inserts, deletes]) await proxy.admin('DELETE', `/grants/${g.id}`);
     });
 
+    it('a denial can carry a note for the agent; the approval records who decided', async () => {
+      const call = query('DELETE FROM orders WHERE id = 23');
+      const a = await decideNext('deny', { reason: '  Archive it first, then delete.  ' });
+      const r = await call;
+      expect(r.isError).toBe(true);
+      expect(textOf(r)).toBe(
+        "twophase: denied by the operator: Archive it first, then delete. Follow the operator's note: change the statement rather than resending it as is.",
+      );
+      expect(await proxy.admin('GET', `/approvals/${a.id}`)).toMatchObject({ status: 'denied', decidedBy: 'admin token', reason: 'Archive it first, then delete.' });
+
+      const plain = query('DELETE FROM orders WHERE id = 23');
+      await decideNext('deny');
+      expect(textOf(await plain)).toMatch(/denied by the operator\. Do not retry/);
+    });
+
+    it('an approval released by a new trust window records the window as the decider', async () => {
+      const call = query("UPDATE orders SET status = 'by-window' WHERE id = 24");
+      const a = await proxy.nextPending();
+      const g = await proxy.admin('POST', '/grants', { databaseId: db.id, userId: client.user.id, operation: 'update', tablePattern: 'orders', durationMinutes: 5 });
+      await call;
+      expect(await proxy.admin('GET', `/approvals/${a.id}`)).toMatchObject({ status: 'approved', decidedBy: 'trust window', grantId: g.id });
+      await proxy.admin('DELETE', `/grants/${g.id}`);
+    });
+
     it('a denied read hidden in a subquery of a write blocks the whole statement without asking', async () => {
       const rule = await proxy.admin('POST', '/rules', { databaseId: db.id, operation: 'read', tablePattern: 'secrets', action: 'deny' });
       const r = await query('UPDATE orders SET status = (SELECT value FROM secrets WHERE id = 1) WHERE id = 12');
@@ -144,6 +168,14 @@ describe.skipIf(!available)('complex statements against real Postgres', () => {
       const results = (await run) as unknown as { command: string; rows: any[] }[];
       expect(results.map((r) => r.command)).toEqual(['SELECT', 'INSERT', 'UPDATE', 'SELECT']);
       expect(results[3].rows).toEqual([{ status: 'batch' }]);
+      await c.end();
+    });
+
+    it("a denial's note reaches psql-style clients in the error message", async () => {
+      const c = await wire();
+      const run = c.query('DELETE FROM orders WHERE id = 25');
+      await decideNext('deny', { reason: 'not during business hours' });
+      await expect(run).rejects.toMatchObject({ code: '42501', message: 'twophase: denied by the operator: not during business hours' });
       await c.end();
     });
 

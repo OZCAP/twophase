@@ -88,6 +88,7 @@ const decision = z.object({
   decision: z.enum(['approve', 'deny']),
   scope: z.enum(['once', 'tables', 'operation', 'database']).default('once'),
   durationMinutes: z.number().positive().nullable().default(null),
+  reason: z.string().trim().max(500).optional(),
 });
 
 const pushSubscription = z.object({
@@ -343,7 +344,9 @@ export function adminRouter(deps: AdminDeps) {
   });
 
   r.post('/approvals/:id/decision', (req, res) => {
-    res.json(withNames([approvals.decide(req.params.id, parse(decision, req.body))])[0]);
+    const identity = res.locals.identity as TailscaleIdentity | undefined;
+    const by = identity?.node ?? (auth.mode === 'token' ? 'admin token' : null);
+    res.json(withNames([approvals.decide(req.params.id, parse(decision, req.body), by)])[0]);
   });
 
   // ── audit ───────────────────────────────────────────────

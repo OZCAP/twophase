@@ -141,6 +141,9 @@ label.check input { width: auto; }
 .actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .trust { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 4px 8px; border: 1px dashed var(--border); border-radius: 8px; }
 .trust select { padding: 5px 8px; }
+.deny-note { margin-top: 8px; gap: 8px; }
+.deny-note input { min-width: 0; }
+.reason { font-style: italic; overflow-wrap: anywhere; }
 .countdown { font-variant-numeric: tabular-nums; font-weight: 600; color: var(--muted); }
 .countdown.soon { color: var(--soon); }
 .countdown.urgent { color: var(--deny); }

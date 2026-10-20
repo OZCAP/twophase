@@ -87,6 +87,13 @@ the same kind of statement on the same tables ("DELETE on orders"), that kind of
 anywhere in the database ("any DELETE"), or everything on the database. Trust windows apply to the client on both MCP and Postgres, release
 matching statements already waiting, and never override **Deny**.
 
+**Deny with a note** sends your note to the client with the denial: MCP agents are told to change
+the statement as it says, and SQL clients see it in the error message. Each decision records who
+made it (the tailnet device, `admin token`, or `trust window` when a window released it).
+
+You can also open a trust window by hand (**Approvals → Trust windows → New window**), e.g. for
+a client's updates on one table before a job you know will run.
+
 When a window covers only part of a statement or batch, the approval asks about the rest
 only: the card lists the covered parts under **Already trusted**, with the window's time left,
 and the notification names just what needs you. A trust window opened from that card covers

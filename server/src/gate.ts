@@ -43,6 +43,8 @@ export type GateOutcome =
       message: string;
       /** SQLSTATE to report: 42501 insufficient_privilege, or 57014 query_canceled. */
       sqlstate: string;
+      /** The operator's note on a denial (also part of `message`). */
+      reason?: string | null;
     };
 
 export function operationsOf(analysis: Analysis): Operation[] {
@@ -182,11 +184,11 @@ export class Gate {
     const sqlstate = status === 'denied' ? '42501' : '57014';
     audit(decision, { approvalId: approval.id, sqlstate });
     const message = {
-      denied: 'twophase: denied by the operator',
+      denied: `twophase: denied by the operator${approval.reason ? `: ${approval.reason}` : ''}`,
       expired: `twophase: not approved within ${Math.round(this.approvals.timeoutMs / 1000)}s`,
       cancelled: 'twophase: canceling statement due to user request',
     }[status];
-    return { allowed: false, decision, approvalId: approval.id, sqlstate, message };
+    return { allowed: false, decision, approvalId: approval.id, sqlstate, message, reason: approval.reason };
   }
 }
 

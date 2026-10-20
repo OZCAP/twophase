@@ -110,7 +110,10 @@ export function createDatabaseMcpServer(databaseId: string, userId: string, deps
     } finally {
       ka.stop();
     }
-    if (!outcome.allowed) return fail(`${outcome.message}. Do not retry this statement unless asked to.`);
+    if (!outcome.allowed) {
+      const advice = outcome.reason ? 'Follow the operator\'s note: change the statement rather than resending it as is.' : 'Do not retry this statement unless asked to.';
+      return fail(`${outcome.message.replace(/[.!?]$/, '')}. ${advice}`);
+    }
     try {
       return await run(outcome);
     } catch (err) {

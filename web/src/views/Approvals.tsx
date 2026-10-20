@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import { ENGINE_LABEL, previewSql, type Approval, type DecisionScope, type Grant, type PolicyTarget } from '../api';
+import { ENGINE_LABEL, OPERATIONS, previewSql, type Approval, type DecisionScope, type Grant, type PolicyTarget } from '../api';
 import { useProxy } from '../state';
-import { attempt, clock, Code, countdownClass, describeAccess, Empty, OpChip, relative, targetLabel, TRUST_DURATIONS, useNow } from '../ui';
+import { attempt, clock, Code, countdownClass, describeAccess, Empty, Modal, OP_LABEL, OpChip, opDescription, relative, targetLabel, TRUST_DURATIONS, useNow, VERB_LABEL, verbDescription, verbsFor } from '../ui';
 
 export function ApprovalsView({ focusId }: { focusId?: string }) {
-  const { api, pending, recent, grants } = useProxy();
+  const { api, pending, recent, grants, databases } = useProxy();
+  const [newWindow, setNewWindow] = useState(false);
   const focusedPending = focusId ? pending.find((a) => a.id === focusId) : undefined;
   // A linked approval that isn't waiting (any more): load it to say what became of it.
   const [linked, setLinked] = useState<Approval | 'missing' | null>(null);
@@ -55,9 +56,15 @@ export function ApprovalsView({ focusId }: { focusId?: string }) {
       </section>
 
       <section>
-        <h2>Trust windows</h2>
+        <div className="row">
+          <h2 className="grow">Trust windows</h2>
+          <button className="btn small" onClick={() => setNewWindow(true)} disabled={databases.length === 0}>
+            New window
+          </button>
+        </div>
+        {newWindow && <TrustWindowEditor onClose={() => setNewWindow(false)} />}
         {grants.length === 0 ? (
-          <p className="muted">No active trust windows. Approving “and trust for …” opens one.</p>
+          <p className="muted">No active trust windows. Approving “and trust for …” opens one, or open one here before a job runs.</p>
         ) : (
           <ul className="list">
             {grants.map((g) => (
@@ -86,6 +93,7 @@ export function ApprovalsView({ focusId }: { focusId?: string }) {
                     </span>
                   </div>
                   <div className="muted mono ellipsis">{previewSql(a.sql)}</div>
+                  <DecidedBy approval={a} />
                 </div>
                 <span className="muted small">{relative(a.decidedAt ?? a.createdAt)}</span>
               </li>
@@ -105,6 +113,18 @@ const STATUS_TEXT: Record<Approval['status'], string> = {
   cancelled: 'Withdrawn by the client before a decision',
 };
 
+/** Who decided, and the note sent with a denial. */
+function DecidedBy({ approval: a }: { approval: Approval }) {
+  if (!a.decidedBy && !a.reason) return null;
+  return (
+    <div className="muted small">
+      {a.decidedBy && <>by {a.decidedBy}</>}
+      {a.decidedBy && a.reason && ' · '}
+      {a.reason && <span className="reason">“{a.reason}”</span>}
+    </div>
+  );
+}
+
 /** The approval a notification pointed to, after it was decided. */
 function ResolvedCard({ approval: a }: { approval: Approval }) {
   const now = useNow();
@@ -122,6 +142,7 @@ function ResolvedCard({ approval: a }: { approval: Approval }) {
           <div className="muted">
             {STATUS_TEXT[a.status]} · {relative(a.decidedAt ?? a.createdAt, now)} · {a.userName} → {a.databaseName}
           </div>
+          <DecidedBy approval={a} />
         </div>
       </header>
       <Code>{a.sql}</Code>
@@ -148,6 +169,8 @@ function PendingCard({ approval: a, focused }: { approval: Approval; focused: bo
   const now = useNow();
   const [busy, setBusy] = useState(false);
   const [minutes, setMinutes] = useState<number | null>(10);
+  const [noting, setNoting] = useState(false);
+  const [note, setNote] = useState('');
   const remaining = Math.max(0, Math.round((new Date(a.expiresAt).getTime() - now) / 1000));
   // What's being asked, as specifically as we know it: DELETE rather than write.
   const askedTargets = [...new Set(a.asked.map((x): PolicyTarget => x.verb ?? x.op))];
@@ -274,10 +297,41 @@ function PendingCard({ approval: a, focused }: { approval: Approval; focused: bo
             everything on {a.databaseName}
           </button>
         </div>
-        <button className="btn deny" disabled={busy} onClick={() => act({ decision: 'deny' })}>
-          Deny
-        </button>
+        {!noting && (
+          <>
+            <button className="btn deny" disabled={busy} onClick={() => act({ decision: 'deny' })}>
+              Deny
+            </button>
+            <button className="btn ghost small" disabled={busy} onClick={() => setNoting(true)}>
+              Deny with a note…
+            </button>
+          </>
+        )}
       </div>
+      {noting && (
+        <form
+          className="row deny-note"
+          onSubmit={(e) => {
+            e.preventDefault();
+            act({ decision: 'deny', reason: note.trim() });
+          }}
+        >
+          <input
+            className="grow"
+            autoFocus
+            maxLength={500}
+            value={note}
+            placeholder="What should the client do instead?"
+            onChange={(e) => setNote(e.target.value)}
+          />
+          <button className="btn deny" disabled={busy || !note.trim()}>
+            Deny
+          </button>
+          <button type="button" className="btn ghost small" onClick={() => setNoting(false)}>
+            Cancel
+          </button>
+        </form>
+      )}
     </article>
   );
 }
@@ -307,5 +361,108 @@ export function GrantRow({ grant: g }: { grant: Grant }) {
         Revoke
       </button>
     </li>
+  );
+}
+
+/** Open a trust window by hand, e.g. before a job you know will write. */
+function TrustWindowEditor({ onClose }: { onClose(): void }) {
+  const { api, databases, users } = useProxy();
+  const [databaseId, setDatabaseId] = useState(databases[0]?.id ?? '');
+  const [userId, setUserId] = useState<string | null>(null);
+  const [operation, setOperation] = useState<PolicyTarget | null>('write');
+  const [table, setTable] = useState('');
+  const [minutes, setMinutes] = useState<number | null>(60);
+  const engine = databases.find((d) => d.id === databaseId)?.engine ?? 'postgres';
+  const clients = users.filter((u) => u.access.some((a) => a.databaseId === databaseId));
+
+  const save = async () => {
+    const ok = await attempt(() => api.createGrant({ databaseId, userId, operation, tablePattern: table.trim() || null, durationMinutes: minutes }));
+    if (ok) onClose();
+  };
+
+  return (
+    <Modal title="New trust window" onClose={onClose}>
+      <form
+        className="form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void save();
+        }}
+      >
+        <p className="muted small">
+          Statements it covers run without asking until it ends. It never overrides a Deny, and it also releases matching statements already waiting.
+        </p>
+        <label>
+          Database
+          <select
+            value={databaseId}
+            onChange={(e) => {
+              setDatabaseId(e.target.value);
+              setUserId(null);
+            }}
+          >
+            {databases.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.name} ({ENGINE_LABEL[d.engine]})
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Client
+          <select value={userId ?? ''} onChange={(e) => setUserId(e.target.value || null)}>
+            <option value="">Every client</option>
+            {clients.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Statements
+          <select value={operation ?? ''} onChange={(e) => setOperation((e.target.value || null) as PolicyTarget | null)}>
+            <option value="">Anything that would ask</option>
+            {OPERATIONS.map((op) => (
+              <optgroup key={op} label={OP_LABEL[op]}>
+                <option value={op}>
+                  {op === 'admin' ? 'admin' : `any ${OP_LABEL[op]}`} — {opDescription(op, engine)}
+                </option>
+                {op !== 'read' &&
+                  op !== 'admin' &&
+                  verbsFor(op, engine).map((verb) => (
+                    <option key={verb} value={verb}>
+                      {VERB_LABEL[verb]} — {verbDescription(verb, engine)}
+                    </option>
+                  ))}
+              </optgroup>
+            ))}
+          </select>
+        </label>
+        <label>
+          Table <span className="muted small">— name or pattern (audit_*, app.*); empty = any table</span>
+          <input value={table} placeholder="any table" onChange={(e) => setTable(e.target.value)} />
+        </label>
+        <label>
+          For
+          <select value={minutes ?? ''} onChange={(e) => setMinutes(e.target.value ? Number(e.target.value) : null)}>
+            {TRUST_DURATIONS.map((d) => (
+              <option key={d.label} value={d.minutes ?? ''}>
+                {d.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="row">
+          <span className="grow" />
+          <button type="button" className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="btn primary" disabled={!databaseId}>
+            Open window
+          </button>
+        </div>
+      </form>
+    </Modal>
   );
 }

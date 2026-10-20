@@ -150,6 +150,10 @@ export interface Approval extends Named {
   asked: Access[];
   /** What a trust window already covered when the request came in (missing on older approvals). */
   trusted?: (Access & { grantId: string })[];
+  /** Who decided: a tailnet device, `admin token` or `trust window` (missing on older approvals). */
+  decidedBy?: string | null;
+  /** The operator's note on a denial, sent to the client. */
+  reason?: string | null;
   operations: Operation[];
   verbs: Verb[];
   tables: string[];
@@ -193,7 +197,7 @@ export interface ProxyStatus {
 }
 
 export type DecisionScope = 'once' | 'tables' | 'operation' | 'database';
-export type Decision = { decision: 'deny' } | { decision: 'approve'; scope?: DecisionScope; durationMinutes?: number | null };
+export type Decision = { decision: 'deny'; reason?: string } | { decision: 'approve'; scope?: DecisionScope; durationMinutes?: number | null };
 
 export class ApiError extends Error {
   constructor(

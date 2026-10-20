@@ -16,6 +16,8 @@ export interface DecisionInput {
   scope?: DecisionScope;
   /** Length of the trust window. null/undefined = until revoked. */
   durationMinutes?: number | null;
+  /** With a denial: a note for the client, e.g. what to change. */
+  reason?: string | null;
 }
 
 export class ApprovalError extends Error {
@@ -77,21 +79,22 @@ export class ApprovalService {
     return result;
   }
 
-  decide(id: string, input: DecisionInput): Approval {
+  /** `by`: who decided (device name or `admin token`), recorded on the approval. */
+  decide(id: string, input: DecisionInput, by: string | null = null): Approval {
     const approval = this.store.getApproval(id);
     if (!approval) throw new ApprovalError('Approval not found', 404);
     if (approval.status !== 'pending') throw new ApprovalError(`Approval is already ${approval.status}`, 409);
 
-    if (input.decision === 'deny') return this.finish(id, 'denied')!;
+    if (input.decision === 'deny') return this.finish(id, 'denied', { decidedBy: by, reason: input.reason?.trim() || null })!;
     const scope = input.scope ?? 'once';
-    if (scope === 'once') return this.finish(id, 'approved')!;
+    if (scope === 'once') return this.finish(id, 'approved', { decidedBy: by })!;
 
     const expiresAt = input.durationMinutes ? new Date(Date.now() + input.durationMinutes * 60_000) : null;
     const created = grantsForScope(scope, approval.asked).map((g) =>
       this.store.createGrant({ ...g, databaseId: approval.databaseId, userId: approval.userId, expiresAt, approvalId: approval.id, note: null }),
     );
     for (const g of created) this.events.emit('grant.created', g);
-    const decided = this.finish(id, 'approved', created[0]?.id ?? null)!;
+    const decided = this.finish(id, 'approved', { grantId: created[0]?.id ?? null, decidedBy: by })!;
     this.approveCovered(approval.databaseId);
     return decided;
   }
@@ -116,12 +119,12 @@ export class ApprovalService {
       if (!a || a.databaseId !== databaseId) continue;
       const grants = this.store.listActiveGrants({ databaseId, userId: a.userId });
       // The windows that were already trusted may have ended meanwhile: check everything again.
-      if (grantsCover(grants, a.userId, [...a.asked, ...a.trusted])) this.finish(id, 'approved', grants[0]?.id ?? null);
+      if (grantsCover(grants, a.userId, [...a.asked, ...a.trusted])) this.finish(id, 'approved', { grantId: grants[0]?.id ?? null, decidedBy: 'trust window' });
     }
   }
 
-  private finish(id: string, status: Exclude<ApprovalStatus, 'pending'>, grantId: string | null = null) {
-    const updated = this.store.resolveApproval(id, status, grantId);
+  private finish(id: string, status: Exclude<ApprovalStatus, 'pending'>, extra: Parameters<Store['resolveApproval']>[2] = {}) {
+    const updated = this.store.resolveApproval(id, status, extra);
     if (!updated) return null;
     const waiter = this.waiters.get(id);
     if (waiter) {

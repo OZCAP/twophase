@@ -251,11 +251,15 @@ export class Store {
   }
 
   /** Transition a pending approval. Returns null if it was no longer pending (someone else won the race). */
-  resolveApproval(id: string, status: Exclude<ApprovalStatus, 'pending'>, grantId: string | null = null): Approval | null {
+  resolveApproval(
+    id: string,
+    status: Exclude<ApprovalStatus, 'pending'>,
+    extra: { grantId?: string | null; decidedBy?: string | null; reason?: string | null } = {},
+  ): Approval | null {
     return (
       this.db
         .update(t.approvals)
-        .set({ status, grantId, decidedAt: new Date() })
+        .set({ status, grantId: extra.grantId ?? null, decidedBy: extra.decidedBy ?? null, reason: extra.reason ?? null, decidedAt: new Date() })
         .where(and(eq(t.approvals.id, id), eq(t.approvals.status, 'pending')))
         .returning()
         .get() ?? null

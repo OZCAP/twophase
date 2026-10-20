@@ -165,6 +165,10 @@ export const approvals = sqliteTable(
     createdAt: createdAt(),
     expiresAt: timestamp().notNull(),
     decidedAt: timestamp(),
+    /** Who decided: the tailnet device, `admin token`, or `trust window` when a window released it. */
+    decidedBy: text(),
+    /** The operator's note on a denial, passed to the client. */
+    reason: text(),
     grantId: text(),
   },
   (t) => [index('approvals_status_idx').on(t.status, t.createdAt)],
