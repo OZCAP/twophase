@@ -498,15 +498,21 @@ export function analyze(sql: string, ctx: AnalyzeContext = {}): Analysis {
     };
   }
   const bytes = Buffer.from(sql, 'utf8');
+  // A PREPARE earlier in the same string is known to a later EXECUTE.
+  const prepared = new Map(ctx.prepared);
   const statements = (parsed.stmts ?? []).map((raw) => {
     const text = sliceStatement(bytes, raw.stmt_location, raw.stmt_len);
     let partial: Partial;
     try {
-      partial = classify(raw.stmt, ctx);
+      partial = classify(raw.stmt, { ...ctx, prepared });
     } catch {
       partial = admin('UNKNOWN', 'classification_failed');
     }
-    if (partial.prepared) partial.prepared.analysis.text = text;
+    if (partial.prepared) {
+      partial.prepared.analysis.text = text;
+      // Postgres refuses to PREPARE a name that exists, so an EXECUTE would still run the old one.
+      if (!prepared.has(partial.prepared.name)) prepared.set(partial.prepared.name, partial.prepared.analysis);
+    }
     return { text, ...partial };
   });
   return { statements, error: null };

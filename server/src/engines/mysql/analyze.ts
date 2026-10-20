@@ -443,7 +443,10 @@ function classifyInsert(s: Stmt, start: number): Partial {
 const lockedOrRead = (s: Stmt, table: string): Access =>
   s.flags.has('row_locks') ? { op: 'write', verb: 'lock', table } : { op: 'read', verb: 'select', table };
 
-/** UPDATE [LOW_PRIORITY] [IGNORE] t [, u | JOIN u …] SET … — every table in the UPDATE clause may be written. */
+/**
+ * UPDATE [LOW_PRIORITY] [IGNORE] t [, u | JOIN u …] SET … — every table in the UPDATE clause may be
+ * written, except those inside a derived table (a subquery there is read-only).
+ */
 function classifyUpdate(s: Stmt, start: number): Partial {
   let i = start + 1;
   while (isWord(s.t[i], 'LOW_PRIORITY', 'IGNORE')) s.consumed.add(i++);
@@ -452,7 +455,13 @@ function classifyUpdate(s: Stmt, start: number): Partial {
   const before = s.refs.length;
   s.refList(i);
   const headFuncs = s.scan(i, end);
-  const head = s.refs.slice(before).filter((r) => r.at < end);
+  const topLevel = new Set<number>();
+  for (let j = i, depth = 0; j < end; j++) {
+    if (isPunct(s.t[j], '(')) depth++;
+    else if (isPunct(s.t[j], ')')) depth--;
+    else if (depth === 0) topLevel.add(j);
+  }
+  const head = s.refs.slice(before).filter((r) => topLevel.has(r.at));
   const funcs = [...headFuncs, ...s.scan(end)];
   const headSet = new Set(head);
   const accesses: Access[] = head.map((r) => ({ op: 'write', verb: 'update', table: r.name }));
@@ -1088,15 +1097,18 @@ export function analyzeMysql(sql: string, ctx: MysqlAnalyzeContext = {}): Analys
       error: message,
     };
   }
+  // A PREPARE earlier in the same string is known to a later EXECUTE.
+  const prepared = new Map(ctx.prepared);
   const statements = split(tokens).map(({ tokens: t, absorbed }): StatementAnalysis => {
     const text = sliceTokens(sql, t);
     let partial: Partial;
     try {
-      partial = classifyTokens(t, ctx, absorbed);
+      partial = classifyTokens(t, { ...ctx, prepared }, absorbed);
     } catch {
       partial = admin('UNKNOWN', 'classification_failed');
     }
     if (absorbed && partial.kind !== 'admin') partial = admin(partial.command, 'compound_statement');
+    if (partial.prepared) prepared.set(partial.prepared.name, partial.prepared.analysis);
     return { text, ...partial };
   });
   return { statements, error: null };
