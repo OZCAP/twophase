@@ -1,7 +1,7 @@
 /* Service worker: receives Web Push for approvals and lets you approve/deny from the notification. */
 
 /** Bump when this file changes, so diagnostics show which worker a device is running. */
-const SW_VERSION = 'nav-7';
+const SW_VERSION = 'nav-8';
 const ICON = '/icons/icon-192.png';
 const BADGE = '/icons/badge-96.png';
 
@@ -33,27 +33,19 @@ async function api(path, init = {}) {
   return res.status === 204 ? null : res.json();
 }
 
-/** Report a step to the proxy's diagnostics log (GET /admin/api/client-log). Never throws. */
-function log(event, detail) {
-  return api('/client-log', { method: 'POST', body: JSON.stringify({ source: 'sw', event, detail: { v: SW_VERSION, ...detail } }) }).catch(() => {});
-}
-
 // Pages listen here too: a second path for "navigate", in case client.postMessage is lost.
 const channel = new BroadcastChannel('twophase');
 
 // ── lifecycle ───────────────────────────────────────────────
 
-self.addEventListener('install', (event) => {
-  self.skipWaiting();
-  event.waitUntil(log('install'));
-});
-// Pages ask which worker is running (Settings shows it; diagnostics log it).
+self.addEventListener('install', () => self.skipWaiting());
+// Pages ask which worker is running (Settings shows it).
 self.addEventListener('message', (event) => {
   if (event.data?.type !== 'version') return;
   event.source?.postMessage({ type: 'version', v: SW_VERSION });
   channel.postMessage({ type: 'version', v: SW_VERSION });
 });
-self.addEventListener('activate', (event) => event.waitUntil(Promise.all([self.clients.claim(), log('activate')])));
+self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
 
 // ── push ────────────────────────────────────────────────────
 
@@ -64,7 +56,6 @@ self.addEventListener('push', (event) => {
   } catch {
     data = { type: 'message', title: 'Twophase', body: event.data ? event.data.text() : '', url: '/' };
   }
-  void log('push', { type: data.type, approvalId: data.approvalId ?? null });
   // Always show something: Safari revokes subscriptions whose pushes don't display a notification.
   event.waitUntil(
     data.type === 'approval'
@@ -89,7 +80,6 @@ self.addEventListener('push', (event) => {
 self.addEventListener('notificationclick', (event) => {
   const data = event.notification.data || {};
   event.notification.close();
-  void log('notificationclick', { action: event.action || null, url: data.url || null });
   if (data.type === 'approval' && (event.action === 'approve' || event.action === 'deny')) {
     event.waitUntil(decide(data, event.action));
   } else {
@@ -125,10 +115,9 @@ async function openApp(url) {
   await kv('readwrite', (s) => s.put({ url: target, at: Date.now(), nonce }, 'pendingNavigation')).catch(() => {});
   const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
   const existing = windows.filter((w) => new URL(w.url).origin === self.location.origin);
-  await log('openApp', { target, windows: existing.map((w) => ({ url: w.url, focused: w.focused, visibility: w.visibilityState })) });
   if (existing.length === 0) {
-    const opened = await self.clients.openWindow(target).catch((e) => (log('openWindow failed', { error: String(e) }), null));
-    return log('openWindow', { ok: !!opened, url: opened?.url ?? null });
+    await self.clients.openWindow(target).catch(() => null);
+    return;
   }
 
   const acked = new Promise((resolve) => {
@@ -140,15 +129,14 @@ async function openApp(url) {
   for (const w of existing) w.postMessage({ type: 'navigate', url: target, nonce });
   channel.postMessage({ type: 'navigate', url: target, nonce });
   const win = existing.find((w) => w.focused) ?? existing[0];
-  const focus = await win.focus().then(() => 'ok', (e) => String(e));
+  await win.focus().catch(() => {});
 
-  if (await acked) return log('navigated by page', { focus });
+  if (await acked) return;
   // The page clears the stored target when it navigates: if it's gone, the ack was just lost on the way.
   const stored = await kv('readonly', (s) => s.get('pendingNavigation')).catch(() => undefined);
-  if (stored?.nonce !== nonce) return log('navigated by page (no ack)', { focus });
+  if (stored?.nonce !== nonce) return;
   // No page answered: load the URL in the window directly.
-  const navigated = await win.navigate(target).then((c) => (c ? c.url : 'null client'), (e) => `failed: ${e}`);
-  return log('client.navigate', { focus, result: navigated });
+  await win.navigate(target).catch(() => {});
 }
 
 // Browsers may rotate a subscription; re-register the new one with the proxy.

@@ -11,17 +11,6 @@ export const isStandalone =
 /** How long a tapped notification's target stays valid if the app only wakes up later. */
 const PENDING_NAVIGATION_MS = 5 * 60_000;
 
-/** Report a step to the proxy's diagnostics log (GET /admin/api/client-log). Never throws. */
-export function clientLog(event: string, detail?: Record<string, unknown>) {
-  const token = localStorage.getItem('twophase-admin-token');
-  void fetch('/admin/api/client-log', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', ...(token && { authorization: `Bearer ${token}` }) },
-    body: JSON.stringify({ source: 'page', event, detail: { hash: location.hash, visibility: document.visibilityState, ...detail } }),
-    keepalive: true,
-  }).catch(() => {});
-}
-
 interface NavigateRequest {
   url: string;
   nonce?: string;
@@ -34,34 +23,32 @@ let navigatedAt = 0;
 const channel = 'BroadcastChannel' in window ? new BroadcastChannel('twophase') : null;
 
 /** Go to a tapped notification's target (once per tap), and tell the service worker it worked. */
-function handleNavigate(req: NavigateRequest, via: string) {
+function handleNavigate(req: NavigateRequest) {
   if (req.nonce && handledNonces.has(req.nonce)) return;
   if (req.nonce) handledNonces.add(req.nonce);
   navigatedAt = Date.now();
-  const from = location.hash;
   const target = new URL(req.url, location.origin);
   if (target.origin === location.origin && target.hash && location.hash !== target.hash) location.hash = target.hash;
   void kv('readwrite', (s) => s.delete('pendingNavigation')).catch(() => {});
   const ack = { type: 'navigated', nonce: req.nonce };
   channel?.postMessage(ack);
   navigator.serviceWorker?.controller?.postMessage(ack);
-  clientLog('navigate', { via, from, to: target.hash });
 }
 
-async function consumePendingNavigation(via: string) {
+async function consumePendingNavigation() {
   const pending = await kv<NavigateRequest>('readonly', (s) => s.get('pendingNavigation')).catch(() => undefined);
   if (!pending) return false;
-  if (Date.now() - (pending.at ?? 0) < PENDING_NAVIGATION_MS) handleNavigate(pending, via);
+  if (Date.now() - (pending.at ?? 0) < PENDING_NAVIGATION_MS) handleNavigate(pending);
   else await kv('readwrite', (s) => s.delete('pendingNavigation')).catch(() => {});
   return true;
 }
 
 /** iOS can show the page before the service worker's click handler has stored the target: keep looking briefly. */
-function lookForPendingNavigation(via: string) {
+function lookForPendingNavigation() {
   let tries = 0;
   const delays = [0, 250, 600, 1200, 2500, 4000];
   const next = () => {
-    void consumePendingNavigation(via).then((found) => {
+    void consumePendingNavigation().then((found) => {
       if (!found && ++tries < delays.length) setTimeout(next, delays[tries] - delays[tries - 1]);
     });
   };
@@ -90,11 +77,6 @@ export async function serviceWorkerVersion(): Promise<string> {
   });
 }
 
-async function workerState() {
-  const reg = await navigator.serviceWorker.getRegistration().catch(() => undefined);
-  return { sw: await serviceWorkerVersion(), waiting: !!reg?.waiting, installing: !!reg?.installing, active: reg?.active?.state ?? null };
-}
-
 /**
  * Last resort when no notification tap reached the page (iOS may not run the worker's click
  * handler, or still be running an old worker): open the newest pending approval that arrived while
@@ -113,7 +95,7 @@ async function openTappedApproval(since: number) {
   const shown = new Set(((await reg?.getNotifications().catch(() => [])) ?? []).map((n) => n.tag));
   const tapped = pending.find((a) => !shown.has(`approval:${a.id}`)) ?? pending[0];
   if (Date.now() - navigatedAt < 10_000 || /^#\/approvals\/./.test(location.hash)) return;
-  handleNavigate({ url: `/#/approvals/${tapped.id}` }, 'guess');
+  handleNavigate({ url: `/#/approvals/${tapped.id}` });
 }
 
 /** Reload into the latest build if this page is older than what the server now serves. */
@@ -121,7 +103,6 @@ async function reloadIfStale(): Promise<boolean> {
   const res = await fetch('/version.json', { cache: 'no-store' }).catch(() => undefined);
   const build = res?.ok ? ((await res.json().catch(() => null)) as { build?: string } | null)?.build : undefined;
   if (!build || build === __BUILD_TIME__) return false;
-  clientLog('reload (stale build)', { from: __BUILD_TIME__, to: build });
   reloading = true;
   location.reload();
   return true;
@@ -148,10 +129,10 @@ export async function registerServiceWorker() {
   // A tapped notification reaches the page three ways (whichever iOS delivers): a message from the
   // service worker, the BroadcastChannel, and a target left in IndexedDB.
   navigator.serviceWorker.addEventListener('message', (e) => {
-    if (e.data?.type === 'navigate' && typeof e.data.url === 'string') handleNavigate(e.data, 'sw message');
+    if (e.data?.type === 'navigate' && typeof e.data.url === 'string') handleNavigate(e.data);
   });
   channel?.addEventListener('message', (e) => {
-    if (e.data?.type === 'navigate' && typeof e.data.url === 'string') handleNavigate(e.data, 'broadcast');
+    if (e.data?.type === 'navigate' && typeof e.data.url === 'string') handleNavigate(e.data);
   });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
@@ -159,19 +140,18 @@ export async function registerServiceWorker() {
       return;
     }
     const since = awaySince();
-    lookForPendingNavigation('pending (visible)');
+    lookForPendingNavigation();
     void reloadIfStale().then((stale) => {
       if (!stale) setTimeout(() => void openTappedApproval(since).catch(() => {}), 1500);
     });
-    void updateWorker().then(() => workerState().then((w) => clientLog('visible', w)));
+    void updateWorker();
   });
-  window.addEventListener('focus', () => lookForPendingNavigation('pending (focus)'));
-  lookForPendingNavigation('pending (load)');
+  window.addEventListener('focus', () => lookForPendingNavigation());
+  lookForPendingNavigation();
   const since = awaySince();
   setTimeout(() => void openTappedApproval(since).catch(() => {}), 1500);
   await navigator.serviceWorker.register('/sw.js');
   await updateWorker();
-  void workerState().then((w) => clientLog('load', { standalone: isStandalone, ...w }));
 }
 
 /**
