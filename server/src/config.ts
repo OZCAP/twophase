@@ -25,10 +25,6 @@ export interface Config {
   mysqlWire: { enabled: boolean; host: string; port: number; publicPort: number };
   /** Days of activity and decided approvals to keep; 0 keeps everything. */
   auditRetentionDays: number;
-  /** Hours between database backups into DATA_DIR/backups; 0 turns them off. */
-  backupIntervalHours: number;
-  /** How many backups to keep. */
-  backupKeep: number;
   /** Web Push (PWA). Keys are generated and persisted on first boot when unset. */
   vapid: { publicKey?: string; privateKey?: string; subject: string };
 }
@@ -49,8 +45,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     resetAdminToken: env.RESET_ADMIN_TOKEN === '1',
     approvalTimeoutSeconds: Number(env.APPROVAL_TIMEOUT_SECONDS ?? 300),
     auditRetentionDays: Number(env.AUDIT_RETENTION_DAYS ?? 90),
-    backupIntervalHours: Number(env.BACKUP_INTERVAL_HOURS ?? 24),
-    backupKeep: Math.max(1, Number(env.BACKUP_KEEP ?? 7)),
     wire: {
       enabled: env.WIRE_ENABLED !== 'false',
       host: env.WIRE_HOST ?? env.HOST ?? '0.0.0.0',

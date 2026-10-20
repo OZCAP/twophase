@@ -15,7 +15,7 @@ EnvironmentFile=/etc/twophase/twophase.env
 ExecStart=/usr/bin/node dist/index.js
 Restart=on-failure
 RestartSec=3
-# Files it creates (database, WAL, backups) are readable by this user only.
+# Files it creates (database, WAL) are readable by this user only.
 UMask=0077
 # The proxy only needs its data directory; everything else stays read-only.
 NoNewPrivileges=true

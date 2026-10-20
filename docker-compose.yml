@@ -7,7 +7,7 @@
 #   docker compose up -d
 #
 # Both containers restart with Docker (restart: unless-stopped), so they come back after a reboot.
-# Their state lives in named volumes: twophase-data (database, backups) and tailscale-state (the
+# Their state lives in named volumes: twophase-data (the database) and tailscale-state (the
 # node's identity). The auth key is only used for the first login; after that the stored state
 # reconnects, even once the key has expired. No ports are published on the host.
 # Without Tailscale, use docker-compose.local.yml instead.
@@ -49,8 +49,6 @@ services:
       APPROVAL_TIMEOUT_SECONDS: ${APPROVAL_TIMEOUT_SECONDS:-300}
       VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@example.com}
       AUDIT_RETENTION_DAYS: ${AUDIT_RETENTION_DAYS:-90}
-      BACKUP_INTERVAL_HOURS: ${BACKUP_INTERVAL_HOURS:-24}
-      BACKUP_KEEP: ${BACKUP_KEEP:-7}
     volumes:
       - twophase-data:/data
       - tailscale-socket:/var/run/tailscale

@@ -280,11 +280,6 @@ export class Store {
     return { audit, approvals };
   }
 
-  /** A consistent copy of the live database (SQLite's online backup), written to `file`. */
-  async backup(file: string): Promise<void> {
-    await this.sqlite.backup(file);
-  }
-
   // ── audit ─────────────────────────────────────────────────
 
   addAudit(e: AuditInput): AuditEntry {
