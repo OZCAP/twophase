@@ -209,13 +209,47 @@ Open http://localhost:5173, sign in with the admin token, then:
 
 ## Deploy
 
+### Docker Compose with Tailscale (recommended)
+
 ```sh
-docker compose up -d --build   # admin/MCP on 127.0.0.1:8787, Postgres on :6432, MySQL on :3307
+cp .env.example .env   # set TS_AUTHKEY, TS_HOSTNAME and ADMIN_TAILSCALE_ALLOW
+docker compose up -d --build
 ```
 
-Or from a checkout with systemd: `deploy/twophase.service` and `deploy/twophase.env.example`.
+This runs Twophase next to a Tailscale container that joins your tailnet as `TS_HOSTNAME` and
+serves (`deploy/tailscale-serve.json`):
 
-Expose it privately, e.g. with Tailscale:
+- `https://<TS_HOSTNAME>.<tailnet>.ts.net`: web app, admin API, hosted MCP;
+- `<TS_HOSTNAME>:6432`: Postgres clients;
+- `<TS_HOSTNAME>:3307`: MySQL / MariaDB clients.
+
+Nothing is published on the host. Sign-in is by Tailscale identity
+([below](#sign-in-with-tailscale-instead-of-an-admin-token)): only the devices in
+`ADMIN_TAILSCALE_ALLOW` can use the app.
+
+- **Persistence.** The database and its backups live in the `twophase-data` volume; the node's
+  Tailscale identity lives in `tailscale-state`. Both containers use `restart: unless-stopped`,
+  so they come back after a reboot (with Docker enabled at boot).
+- **Auth key.** It's only used for the first login. After that the stored state reconnects, even
+  once the key has expired. Use a pre-approved key with a tag (e.g. `tag:twophase`, plus
+  `TS_EXTRA_ARGS=--advertise-tags=tag:twophase`): tagged nodes don't expire. To move the node to
+  another tailnet, remove the `tailscale-state` volume.
+- **HTTPS** needs MagicDNS and HTTPS certificates turned on for the tailnet. The first request
+  can take a few seconds while the certificate is issued.
+- The app runs as an unprivileged user, Tailscale in userspace mode (no `/dev/net/tun` or extra
+  capabilities).
+
+### Docker Compose without Tailscale
+
+```sh
+docker compose -f docker-compose.local.yml up -d --build   # 127.0.0.1:8787, :6432, :3307
+docker compose -f docker-compose.local.yml logs twophase    # the admin token, on first boot
+```
+
+### systemd, from a checkout
+
+`deploy/twophase.service` and `deploy/twophase.env.example`. Expose it privately, e.g. with
+Tailscale on the host:
 
 ```sh
 tailscale serve --bg --https=10000 http://127.0.0.1:8787   # web UI, admin API, hosted MCP
@@ -245,7 +279,8 @@ owner login (`alice@github`) or a machine name, comma separated.
 - The proxy refuses to start in this mode unless it's bound to loopback with a non-empty
   allow-list. Processes on the proxy host itself are trusted.
 - Switching to this mode deletes the stored admin token. Client tokens are unaffected.
-- In Docker, mount `/var/run/tailscale/tailscaled.sock` (or set `TAILSCALE_SOCKET`).
+- In Docker, mount `/var/run/tailscale/tailscaled.sock` (or set `TAILSCALE_SOCKET`). The Tailscale
+  compose file does this for you.
 
 ### Push notifications (PWA / Web Push)
 

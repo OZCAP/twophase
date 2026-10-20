@@ -1,21 +1,61 @@
+# Twophase on your tailnet. Tailscale runs alongside it and serves:
+#   https://<TS_HOSTNAME>.<tailnet>.ts.net   web app, admin API, hosted MCP
+#   <TS_HOSTNAME>:6432                        Postgres clients
+#   <TS_HOSTNAME>:3307                        MySQL / MariaDB clients
+#
+#   cp .env.example .env    # set TS_AUTHKEY and ADMIN_TAILSCALE_ALLOW
+#   docker compose up -d
+#
+# Both containers restart with Docker (restart: unless-stopped), so they come back after a reboot.
+# Their state lives in named volumes: twophase-data (database, backups) and tailscale-state (the
+# node's identity). The auth key is only used for the first login; after that the stored state
+# reconnects, even once the key has expired. No ports are published on the host.
+# Without Tailscale, use docker-compose.local.yml instead.
+
 services:
-  proxy:
+  tailscale:
+    image: tailscale/tailscale:stable
+    hostname: ${TS_HOSTNAME:-twophase}
+    restart: unless-stopped
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      TS_EXTRA_ARGS: ${TS_EXTRA_ARGS:-}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SOCKET: /var/run/tailscale/tailscaled.sock
+      TS_SERVE_CONFIG: /config/serve.json
+      # Userspace networking: no /dev/net/tun or extra capabilities needed.
+      TS_USERSPACE: "true"
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - tailscale-socket:/var/run/tailscale
+      - ./deploy/tailscale-serve.json:/config/serve.json:ro
+
+  twophase:
     build:
       context: .
       dockerfile: server/Dockerfile
+    image: twophase:latest
     restart: unless-stopped
-    ports:
-      - "127.0.0.1:8787:8787" # web UI + admin API + hosted MCP; put TLS in front (Caddy, Tailscale serve, …)
-      - "127.0.0.1:6432:6432" # Postgres listener; expose privately (tailscale serve --tcp=6432 …)
-      - "127.0.0.1:3307:3307" # MySQL / MariaDB listener (tailscale serve --tcp=3307 …)
-    volumes:
-      - proxy-data:/data
+    # Shares the Tailscale container's network, so `tailscale serve` reaches it on 127.0.0.1.
+    network_mode: service:tailscale
+    depends_on:
+      - tailscale
     environment:
-      APPROVAL_TIMEOUT_SECONDS: "300"
-      WIRE_PORT: "6432"
-      MYSQL_WIRE_PORT: "3307"
-      # ADMIN_TOKEN: ""            # optional; otherwise generated on first boot and printed to the log
-      VAPID_SUBJECT: "mailto:you@example.com" # contact for Web Push services; use a real address
+      HOST: 127.0.0.1
+      # Only these tailnet devices may use the app and approve (tags, logins or machine names).
+      ADMIN_AUTH: tailscale
+      ADMIN_TAILSCALE_ALLOW: ${ADMIN_TAILSCALE_ALLOW:?set ADMIN_TAILSCALE_ALLOW in .env, e.g. tag:admin-client}
+      TAILSCALE_SOCKET: /var/run/tailscale/tailscaled.sock
+      APPROVAL_TIMEOUT_SECONDS: ${APPROVAL_TIMEOUT_SECONDS:-300}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@example.com}
+      AUDIT_RETENTION_DAYS: ${AUDIT_RETENTION_DAYS:-90}
+      BACKUP_INTERVAL_HOURS: ${BACKUP_INTERVAL_HOURS:-24}
+      BACKUP_KEEP: ${BACKUP_KEEP:-7}
+    volumes:
+      - twophase-data:/data
+      - tailscale-socket:/var/run/tailscale
 
 volumes:
-  proxy-data:
+  twophase-data:
+  tailscale-state:
+  tailscale-socket:

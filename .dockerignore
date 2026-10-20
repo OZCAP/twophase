@@ -2,3 +2,5 @@
 **/dist
 server/data
 server/test
+.git
+.env

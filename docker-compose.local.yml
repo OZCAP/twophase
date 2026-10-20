@@ -1,0 +1,31 @@
+# Twophase without Tailscale: listens on this machine only, admin login with a token.
+#
+#   docker compose -f docker-compose.local.yml up -d
+#   docker compose -f docker-compose.local.yml logs twophase   # prints the admin token on first boot
+#
+# Put TLS in front before exposing it further (Caddy, nginx, …). Data persists in the
+# twophase-data volume, and the container restarts with Docker, so it survives a reboot.
+
+services:
+  twophase:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    image: twophase:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8787:8787" # web app, admin API, hosted MCP
+      - "127.0.0.1:6432:6432" # Postgres clients
+      - "127.0.0.1:3307:3307" # MySQL / MariaDB clients
+    environment:
+      APPROVAL_TIMEOUT_SECONDS: ${APPROVAL_TIMEOUT_SECONDS:-300}
+      # ADMIN_TOKEN: ""          # optional; otherwise generated on first boot and printed to the log
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@example.com}
+      AUDIT_RETENTION_DAYS: ${AUDIT_RETENTION_DAYS:-90}
+      BACKUP_INTERVAL_HOURS: ${BACKUP_INTERVAL_HOURS:-24}
+      BACKUP_KEEP: ${BACKUP_KEEP:-7}
+    volumes:
+      - twophase-data:/data
+
+volumes:
+  twophase-data:
