@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { DEFAULT_PORT, defaultKey, ENGINE_LABEL, ENGINES, isMysql, OPERATIONS, proxyHost, VERBS, wireEnabled, wirePort, type Engine, type Action, type ConnectionTest, type Database, type DatabaseDraft, type Operation, type PolicyTarget, type Rule, type TableInfo, type Verb } from '../api';
+import { parseConnectionString, suggestName } from '../connstr';
 import { go, useProxy } from '../state';
 import { ACTION_LABEL, ActionBadge, ActionPicker, attempt, CopyButton, Empty, Modal, OP_LABEL, OpChip, opDescription, VERB_LABEL, verbDescription, verbsFor } from '../ui';
 
@@ -322,6 +323,36 @@ function DatabaseEditor({ db, onClose }: { db?: Database; onClose(): void }) {
   });
   const [busy, setBusy] = useState(false);
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF((cur) => ({ ...cur, [k]: e.target.value }));
+  const [connStr, setConnStr] = useState('');
+  const [connResult, setConnResult] = useState<{ ok: boolean; text: string } | null>(null);
+
+  /** Fill the fields from a pasted connection string. The string itself (with its password) isn't kept. */
+  const applyConnectionString = (value: string) => {
+    if (!value.trim()) return setConnResult(null);
+    try {
+      const p = parseConnectionString(value, f.engine);
+      setF((cur) => {
+        const name = cur.name || (db ? cur.name : suggestName(p));
+        return {
+          ...cur,
+          engine: p.engine,
+          host: p.host,
+          port: String(p.port),
+          database: p.database || cur.database,
+          user: p.user || cur.user,
+          password: p.password || cur.password,
+          sslmode: p.sslmode ?? cur.sslmode,
+          name,
+          slug: !db && (cur.slug === '' || cur.slug === slugify(cur.name)) ? slugify(name) : cur.slug,
+        };
+      });
+      setConnStr('');
+      const filled = ['engine', 'host', 'port', p.database && 'database', p.user && 'user', p.password && 'password', p.sslmode && 'TLS'].filter(Boolean);
+      setConnResult({ ok: true, text: `Filled in ${filled.join(', ')} for ${ENGINE_LABEL[p.engine]}.${p.notes.length ? ` ${p.notes.join(' ')}` : ''}` });
+    } catch (err) {
+      setConnResult({ ok: false, text: (err as Error).message });
+    }
+  };
 
   const save = async () => {
     setBusy(true);
@@ -367,6 +398,36 @@ function DatabaseEditor({ db, onClose }: { db?: Database; onClose(): void }) {
           void save();
         }}
       >
+        <label>
+          Connection string <span className="muted small">— optional: paste one to fill in the fields below</span>
+          <input
+            value={connStr}
+            autoComplete="off"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            inputMode="url"
+            placeholder="postgresql://user:password@host:5432/dbname"
+            onChange={(e) => {
+              setConnStr(e.target.value);
+              // A paste arrives whole: apply it at once. Typing waits for blur or Enter.
+              if ((e.nativeEvent as InputEvent).inputType === 'insertFromPaste') applyConnectionString(e.target.value);
+            }}
+            onBlur={() => applyConnectionString(connStr)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                applyConnectionString(connStr);
+              }
+            }}
+          />
+        </label>
+        {connResult && (
+          <p className={connResult.ok ? 'muted small' : 'error small'} style={{ marginTop: -6 }}>
+            {connResult.ok ? '✓ ' : ''}
+            {connResult.text}
+          </p>
+        )}
         <label>
           Engine
           <select

@@ -192,8 +192,10 @@ cd web && npm install && npm run dev
 
 Open http://localhost:5173, sign in with the admin token, then:
 
-1. **Databases → Add database.** Use a dedicated role with only the privileges you'd ever approve,
-   never a superuser. "Test connection" warns about over-privileged logins.
+1. **Databases → Add database.** Paste a connection string (`postgresql://…`, `mysql://…`,
+   `mariadb://…`, JDBC or libpq `key=value`) or fill in the fields. Use a dedicated role with only
+   the privileges you'd ever approve, never a superuser. "Test connection" warns about
+   over-privileged logins.
 2. Adjust the per-operation **defaults** and add **rules** (or click a table's badge to add one).
 3. **Clients → New client.** Pick its databases and whether it may use MCP, the wire protocol or
    both. Copy the token and the generated `psql` / `mysql` command, `.mcp.json` or `claude mcp add`
@@ -315,7 +317,7 @@ mode and an optional read-only login.
 
 ```sh
 cd server && npm test      # classifiers, policy, MCP + wire integration (real Postgres, MySQL, MariaDB), Web Push
-cd web && npm run typecheck
+cd web && npm test && npm run typecheck   # connection-string parsing; types
 ```
 
 The integration tests need a throwaway Postgres; each test file creates and drops its own

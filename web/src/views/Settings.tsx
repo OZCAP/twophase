@@ -23,7 +23,7 @@ export function SettingsView() {
           <dt>MySQL listener</dt>
           <dd className="mono">{status ? (status.mysqlWire?.enabled ? `${location.hostname}:${status.mysqlWire.port}` : 'disabled') : '…'}</dd>
           <dt>Approval timeout</dt>
-          <dd>{status ? `${status.approvalTimeoutSeconds}s (APPROVAL_TIMEOUT_SECONDS)` : '…'}</dd>
+          <dd title="Set with APPROVAL_TIMEOUT_SECONDS">{status ? `${status.approvalTimeoutSeconds} seconds` : '…'}</dd>
           <dt>Signed in</dt>
           <dd>
             {status?.auth.mode === 'tailscale'
