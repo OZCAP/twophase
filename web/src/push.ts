@@ -65,6 +65,30 @@ function lookForPendingNavigation(via: string) {
   next();
 }
 
+/** Which service worker version is in control of this page ('none', or 'old' if it doesn't answer). */
+export async function serviceWorkerVersion(): Promise<string> {
+  const sw = navigator.serviceWorker?.controller;
+  if (!sw) return 'none';
+  return new Promise((resolve) => {
+    const on = (e: MessageEvent) => {
+      if (e.data?.type !== 'version') return;
+      navigator.serviceWorker.removeEventListener('message', on);
+      resolve(String(e.data.v));
+    };
+    navigator.serviceWorker.addEventListener('message', on);
+    sw.postMessage({ type: 'version' });
+    setTimeout(() => {
+      navigator.serviceWorker.removeEventListener('message', on);
+      resolve('old (no answer)');
+    }, 1500);
+  });
+}
+
+async function workerState() {
+  const reg = await navigator.serviceWorker.getRegistration().catch(() => undefined);
+  return { sw: await serviceWorkerVersion(), waiting: !!reg?.waiting, installing: !!reg?.installing, active: reg?.active?.state ?? null };
+}
+
 export async function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   // A tapped notification reaches the page three ways (whichever iOS delivers): a message from the
@@ -77,11 +101,11 @@ export async function registerServiceWorker() {
   });
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible') return;
-    clientLog('visible');
+    void workerState().then((w) => clientLog('visible', w));
     lookForPendingNavigation('pending (visible)');
   });
   window.addEventListener('focus', () => lookForPendingNavigation('pending (focus)'));
-  clientLog('load', { standalone: isStandalone, controlled: !!navigator.serviceWorker.controller });
+  void workerState().then((w) => clientLog('load', { standalone: isStandalone, ...w }));
   lookForPendingNavigation('pending (load)');
   await navigator.serviceWorker.register('/sw.js');
 }

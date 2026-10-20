@@ -1,7 +1,7 @@
 /* Service worker: receives Web Push for approvals and lets you approve/deny from the notification. */
 
 /** Bump when this file changes, so diagnostics show which worker a device is running. */
-const SW_VERSION = 'nav-4';
+const SW_VERSION = 'nav-5';
 const ICON = '/icons/icon-192.png';
 const BADGE = '/icons/badge-96.png';
 
@@ -44,6 +44,10 @@ const channel = new BroadcastChannel('twophase');
 // ── lifecycle ───────────────────────────────────────────────
 
 self.addEventListener('install', () => self.skipWaiting());
+// Pages ask which worker is running (Settings shows it; diagnostics log it).
+self.addEventListener('message', (event) => {
+  if (event.data?.type === 'version') event.source?.postMessage({ type: 'version', v: SW_VERSION });
+});
 self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
 
 // ── push ────────────────────────────────────────────────────

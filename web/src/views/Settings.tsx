@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Api } from '../api';
-import { clearRefreshMarker, currentSubscription, disablePush, enablePush, isIos, isStandalone, pushSupported, refreshApp } from '../push';
+import { clearRefreshMarker, serviceWorkerVersion, currentSubscription, disablePush, enablePush, isIos, isStandalone, pushSupported, refreshApp } from '../push';
 import { useProxy } from '../state';
 import { attempt } from '../ui';
 
@@ -60,6 +60,10 @@ const justRefreshed = clearRefreshMarker();
 
 function AppCard() {
   const [busy, setBusy] = useState(false);
+  const [worker, setWorker] = useState('…');
+  useEffect(() => {
+    void serviceWorkerVersion().then(setWorker);
+  }, []);
   const built = new Date(__BUILD_TIME__);
   return (
     <section className="card">
@@ -69,6 +73,8 @@ function AppCard() {
         <dd>
           {built.toLocaleString()} {justRefreshed && <span className="badge badge-allow">just refreshed</span>}
         </dd>
+        <dt>Background worker</dt>
+        <dd className="mono">{worker}</dd>
       </dl>
       <p className="muted small">
         Re-download the app and reload it, to pick up an update right away. Your sign-in and push notifications stay as they are.
