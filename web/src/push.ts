@@ -29,12 +29,15 @@ interface NavigateRequest {
 }
 
 const handledNonces = new Set<string>();
+/** When the page last went to a notification's target (by any path). */
+let navigatedAt = 0;
 const channel = 'BroadcastChannel' in window ? new BroadcastChannel('twophase') : null;
 
 /** Go to a tapped notification's target (once per tap), and tell the service worker it worked. */
 function handleNavigate(req: NavigateRequest, via: string) {
   if (req.nonce && handledNonces.has(req.nonce)) return;
   if (req.nonce) handledNonces.add(req.nonce);
+  navigatedAt = Date.now();
   const from = location.hash;
   const target = new URL(req.url, location.origin);
   if (target.origin === location.origin && target.hash && location.hash !== target.hash) location.hash = target.hash;
@@ -70,12 +73,15 @@ export async function serviceWorkerVersion(): Promise<string> {
   const sw = navigator.serviceWorker?.controller;
   if (!sw) return 'none';
   return new Promise((resolve) => {
+    // The worker answers both directly and on the BroadcastChannel.
     const on = (e: MessageEvent) => {
       if (e.data?.type !== 'version') return;
       navigator.serviceWorker.removeEventListener('message', on);
+      channel?.removeEventListener('message', on);
       resolve(String(e.data.v));
     };
     navigator.serviceWorker.addEventListener('message', on);
+    channel?.addEventListener('message', on);
     sw.postMessage({ type: 'version' });
     setTimeout(() => {
       navigator.serviceWorker.removeEventListener('message', on);
@@ -89,6 +95,32 @@ async function workerState() {
   return { sw: await serviceWorkerVersion(), waiting: !!reg?.waiting, installing: !!reg?.installing, active: reg?.active?.state ?? null };
 }
 
+/**
+ * Last resort when no notification tap reached the page (iOS may not run the worker's click
+ * handler, or still be running an old worker): a pending approval that arrived while the app was
+ * away and whose notification is no longer showing is the one that was tapped, so open it.
+ */
+async function openTappedApproval(since: number) {
+  if (Date.now() - navigatedAt < 10_000 || /^#\/approvals\/./.test(location.hash)) return;
+  const token = localStorage.getItem('twophase-admin-token');
+  const res = await fetch('/admin/api/approvals?status=pending&limit=20', { headers: token ? { authorization: `Bearer ${token}` } : {} });
+  if (!res.ok) return;
+  const pending = ((await res.json()) as { id: string; createdAt: string }[]).filter((a) => Date.parse(a.createdAt) >= since - 5000);
+  if (pending.length === 0) return;
+  const reg = await navigator.serviceWorker?.getRegistration().catch(() => undefined);
+  const shown = new Set(((await reg?.getNotifications().catch(() => [])) ?? []).map((n) => n.tag));
+  const tapped = pending.filter((a) => !shown.has(`approval:${a.id}`)).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  if (!tapped || Date.now() - navigatedAt < 10_000) return;
+  handleNavigate({ url: `/#/approvals/${tapped.id}` }, 'guess');
+}
+
+/** Ask the browser to fetch sw.js now: iOS rarely checks for a new worker on its own. */
+async function updateWorker() {
+  const reg = await navigator.serviceWorker.getRegistration().catch(() => undefined);
+  await reg?.update().catch(() => {});
+  return reg;
+}
+
 export async function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
   // A tapped notification reaches the page three ways (whichever iOS delivers): a message from the
@@ -99,15 +131,23 @@ export async function registerServiceWorker() {
   channel?.addEventListener('message', (e) => {
     if (e.data?.type === 'navigate' && typeof e.data.url === 'string') handleNavigate(e.data, 'broadcast');
   });
+  let hiddenAt = Date.now() - 2 * 60_000; // a cold start counts approvals from the last two minutes
   document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState !== 'visible') return;
-    void workerState().then((w) => clientLog('visible', w));
+    if (document.visibilityState === 'hidden') {
+      hiddenAt = Date.now();
+      return;
+    }
+    const since = hiddenAt;
     lookForPendingNavigation('pending (visible)');
+    setTimeout(() => void openTappedApproval(since).catch(() => {}), 2000);
+    void updateWorker().then(() => workerState().then((w) => clientLog('visible', w)));
   });
   window.addEventListener('focus', () => lookForPendingNavigation('pending (focus)'));
-  void workerState().then((w) => clientLog('load', { standalone: isStandalone, ...w }));
   lookForPendingNavigation('pending (load)');
+  setTimeout(() => void openTappedApproval(hiddenAt).catch(() => {}), 2000);
   await navigator.serviceWorker.register('/sw.js');
+  await updateWorker();
+  void workerState().then((w) => clientLog('load', { standalone: isStandalone, ...w }));
 }
 
 /**

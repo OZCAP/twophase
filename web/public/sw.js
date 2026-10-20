@@ -1,7 +1,7 @@
 /* Service worker: receives Web Push for approvals and lets you approve/deny from the notification. */
 
 /** Bump when this file changes, so diagnostics show which worker a device is running. */
-const SW_VERSION = 'nav-5';
+const SW_VERSION = 'nav-6';
 const ICON = '/icons/icon-192.png';
 const BADGE = '/icons/badge-96.png';
 
@@ -43,12 +43,17 @@ const channel = new BroadcastChannel('twophase');
 
 // ── lifecycle ───────────────────────────────────────────────
 
-self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('install', (event) => {
+  self.skipWaiting();
+  event.waitUntil(log('install'));
+});
 // Pages ask which worker is running (Settings shows it; diagnostics log it).
 self.addEventListener('message', (event) => {
-  if (event.data?.type === 'version') event.source?.postMessage({ type: 'version', v: SW_VERSION });
+  if (event.data?.type !== 'version') return;
+  event.source?.postMessage({ type: 'version', v: SW_VERSION });
+  channel.postMessage({ type: 'version', v: SW_VERSION });
 });
-self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
+self.addEventListener('activate', (event) => event.waitUntil(Promise.all([self.clients.claim(), log('activate')])));
 
 // ── push ────────────────────────────────────────────────────
 
@@ -59,6 +64,7 @@ self.addEventListener('push', (event) => {
   } catch {
     data = { type: 'message', title: 'Twophase', body: event.data ? event.data.text() : '', url: '/' };
   }
+  void log('push', { type: data.type, approvalId: data.approvalId ?? null });
   // Always show something: Safari revokes subscriptions whose pushes don't display a notification.
   event.waitUntil(
     data.type === 'approval'
