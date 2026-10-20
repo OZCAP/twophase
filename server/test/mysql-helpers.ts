@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import mysql from 'mysql2/promise';
-import type { TestProxy } from './helpers.js';
+import { unavailable, type TestProxy } from './helpers.js';
 
 export type Flavour = 'mysql' | 'mariadb';
 
@@ -17,8 +17,8 @@ export async function mysqlAvailable(flavour: Flavour): Promise<boolean> {
     const c = await mysql.createConnection({ uri: MYSQL_ADMIN_URL[flavour], connectTimeout: 2000 });
     await c.end();
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    return unavailable(flavour, MYSQL_ADMIN_URL[flavour], err);
   }
 }
 

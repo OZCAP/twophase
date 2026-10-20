@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: mcptest
+          POSTGRES_PASSWORD: mcptest
+          POSTGRES_DB: shop
+        ports: ['55432:5432']
+        options: --health-cmd "pg_isready -U mcptest -d shop" --health-interval 2s --health-timeout 5s --health-retries 30
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: roottest
+        ports: ['53306:3306']
+        options: --health-cmd "mysqladmin ping -h 127.0.0.1 -proottest" --health-interval 2s --health-timeout 5s --health-retries 60
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: roottest
+        ports: ['53307:3306']
+        options: --health-cmd "healthcheck.sh --connect --innodb_initialized" --health-interval 2s --health-timeout 5s --health-retries 60
+    env:
+      # Fail, don't skip, if a test database is missing.
+      REQUIRE_TEST_DATABASES: '1'
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test
+
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f server/Dockerfile -t twophase:ci .
+      - name: Container starts and passes its health check
+        run: |
+          docker run -d --name twophase -p 127.0.0.1:8787:8787 twophase:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8787/healthz; then exit 0; fi
+            sleep 1
+          done
+          docker logs twophase
+          exit 1

@@ -11,13 +11,22 @@ export const ADMIN = 'test-admin-token';
 /** Superuser connection to the throwaway test server (see README → Development). */
 export const PG_ADMIN_URL = process.env.PG_TEST_URL ?? 'postgresql://mcptest:mcptest@127.0.0.1:55432/shop';
 
+/**
+ * Integration tests skip an engine whose test server isn't reachable, unless
+ * REQUIRE_TEST_DATABASES=1 (CI), where a missing server is a failure instead.
+ */
+export function unavailable(engine: string, url: string, err: unknown): false {
+  if (process.env.REQUIRE_TEST_DATABASES === '1') throw new Error(`${engine} test server unreachable at ${url.replace(/:[^:@/]*@/, ':***@')}: ${err}`);
+  return false;
+}
+
 export async function postgresAvailable(): Promise<boolean> {
   const c = new pg.Client({ connectionString: PG_ADMIN_URL, connectionTimeoutMillis: 2000 });
   try {
     await c.connect();
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    return unavailable('Postgres', PG_ADMIN_URL, err);
   } finally {
     await c.end().catch(() => {});
   }
