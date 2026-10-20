@@ -11,32 +11,78 @@ export const isStandalone =
 /** How long a tapped notification's target stays valid if the app only wakes up later. */
 const PENDING_NAVIGATION_MS = 5 * 60_000;
 
-function navigateTo(url: string) {
-  const target = new URL(url, location.origin);
-  if (target.origin === location.origin && target.hash && location.hash !== target.hash) location.hash = target.hash;
+/** Report a step to the proxy's diagnostics log (GET /admin/api/client-log). Never throws. */
+export function clientLog(event: string, detail?: Record<string, unknown>) {
+  const token = localStorage.getItem('twophase-admin-token');
+  void fetch('/admin/api/client-log', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...(token && { authorization: `Bearer ${token}` }) },
+    body: JSON.stringify({ source: 'page', event, detail: { hash: location.hash, visibility: document.visibilityState, ...detail } }),
+    keepalive: true,
+  }).catch(() => {});
 }
 
-/** Go where the last tapped notification pointed, if the app hasn't been there yet. */
-async function consumePendingNavigation() {
-  const pending = await kv<{ url: string; at: number }>('readonly', (s) => s.get('pendingNavigation')).catch(() => undefined);
-  if (!pending) return;
-  await kv('readwrite', (s) => s.delete('pendingNavigation')).catch(() => {});
-  if (Date.now() - pending.at < PENDING_NAVIGATION_MS) navigateTo(pending.url);
+interface NavigateRequest {
+  url: string;
+  nonce?: string;
+  at?: number;
+}
+
+const handledNonces = new Set<string>();
+const channel = 'BroadcastChannel' in window ? new BroadcastChannel('twophase') : null;
+
+/** Go to a tapped notification's target (once per tap), and tell the service worker it worked. */
+function handleNavigate(req: NavigateRequest, via: string) {
+  if (req.nonce && handledNonces.has(req.nonce)) return;
+  if (req.nonce) handledNonces.add(req.nonce);
+  const from = location.hash;
+  const target = new URL(req.url, location.origin);
+  if (target.origin === location.origin && target.hash && location.hash !== target.hash) location.hash = target.hash;
+  void kv('readwrite', (s) => s.delete('pendingNavigation')).catch(() => {});
+  const ack = { type: 'navigated', nonce: req.nonce };
+  channel?.postMessage(ack);
+  navigator.serviceWorker?.controller?.postMessage(ack);
+  clientLog('navigate', { via, from, to: target.hash });
+}
+
+async function consumePendingNavigation(via: string) {
+  const pending = await kv<NavigateRequest>('readonly', (s) => s.get('pendingNavigation')).catch(() => undefined);
+  if (!pending) return false;
+  if (Date.now() - (pending.at ?? 0) < PENDING_NAVIGATION_MS) handleNavigate(pending, via);
+  else await kv('readwrite', (s) => s.delete('pendingNavigation')).catch(() => {});
+  return true;
+}
+
+/** iOS can show the page before the service worker's click handler has stored the target: keep looking briefly. */
+function lookForPendingNavigation(via: string) {
+  let tries = 0;
+  const delays = [0, 250, 600, 1200, 2500, 4000];
+  const next = () => {
+    void consumePendingNavigation(via).then((found) => {
+      if (!found && ++tries < delays.length) setTimeout(next, delays[tries] - delays[tries - 1]);
+    });
+  };
+  next();
 }
 
 export async function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return;
-  // The service worker asks an open window to navigate when a notification is tapped, and also leaves
-  // the target in IndexedDB in case the message never arrives (iOS) or the app opened at its start URL.
+  // A tapped notification reaches the page three ways (whichever iOS delivers): a message from the
+  // service worker, the BroadcastChannel, and a target left in IndexedDB.
   navigator.serviceWorker.addEventListener('message', (e) => {
-    if (e.data?.type === 'navigate' && typeof e.data.url === 'string') {
-      navigateTo(e.data.url);
-      void kv('readwrite', (s) => s.delete('pendingNavigation')).catch(() => {});
-    }
+    if (e.data?.type === 'navigate' && typeof e.data.url === 'string') handleNavigate(e.data, 'sw message');
   });
-  document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && void consumePendingNavigation());
-  window.addEventListener('focus', () => void consumePendingNavigation());
-  void consumePendingNavigation();
+  channel?.addEventListener('message', (e) => {
+    if (e.data?.type === 'navigate' && typeof e.data.url === 'string') handleNavigate(e.data, 'broadcast');
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+    clientLog('visible');
+    lookForPendingNavigation('pending (visible)');
+  });
+  window.addEventListener('focus', () => lookForPendingNavigation('pending (focus)'));
+  clientLog('load', { standalone: isStandalone, controlled: !!navigator.serviceWorker.controller });
+  lookForPendingNavigation('pending (load)');
   await navigator.serviceWorker.register('/sw.js');
 }
 

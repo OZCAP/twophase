@@ -385,6 +385,26 @@ export function adminRouter(deps: AdminDeps) {
     res.json(await push.sendTest());
   });
 
+  // ── client diagnostics ──────────────────────────────────
+  // The PWA and its service worker report what happens around notification taps (iOS gives no
+  // other way to see it). Kept in memory only, newest last.
+
+  const clientLog: { at: string; device: string | null; source: string; event: string; detail: unknown }[] = [];
+  const clientLogEntry = z.object({ source: z.enum(['page', 'sw']), event: z.string().max(100), detail: z.unknown().optional() });
+
+  r.post('/client-log', (req, res) => {
+    const entry = parse(clientLogEntry, req.body);
+    const identity = res.locals.identity as TailscaleIdentity | undefined;
+    const detail = JSON.stringify(entry.detail ?? null).length > 2000 ? '(too long)' : (entry.detail ?? null);
+    clientLog.push({ at: new Date().toISOString(), device: identity?.node ?? null, source: entry.source, event: entry.event, detail });
+    if (clientLog.length > 300) clientLog.splice(0, clientLog.length - 300);
+    res.status(204).end();
+  });
+
+  r.get('/client-log', (_req, res) => {
+    res.json(clientLog);
+  });
+
   // ── APNs devices (native iOS app, later) ────────────────
 
   r.post('/devices', (req, res) => {
