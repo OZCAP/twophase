@@ -14,6 +14,7 @@ import { EventBus } from './events.js';
 import { Gate } from './gate.js';
 import { mcpRouter } from './mcp/routes.js';
 import { PushService } from './push/index.js';
+import { Housekeeping } from './housekeeping.js';
 import { Store } from './store.js';
 import { localApiWhois, type Whois } from './tailscaleAuth.js';
 
@@ -28,6 +29,7 @@ export function createApp(config: Config, overrides: { whois?: Whois } = {}) {
   }
 
   const store = new Store(config.dataDir);
+  const housekeeping = new Housekeeping(store, config);
   const events = new EventBus();
   const push = new PushService(store, config);
   const approvals = new ApprovalService(store, events, push, config.approvalTimeoutSeconds);
@@ -71,11 +73,13 @@ export function createApp(config: Config, overrides: { whois?: Whois } = {}) {
       http = await new Promise<HttpServer>((resolve) => {
         const s = app.listen(config.port, config.host, () => resolve(s));
       });
+      housekeeping.start();
       const wirePort = wire ? await wire.listen() : null;
       const mysqlWirePort = mysqlWire ? await mysqlWire.listen() : null;
       return { http, httpPort: (http.address() as AddressInfo).port, wirePort, mysqlWirePort };
     },
     async close() {
+      housekeeping.stop();
       approvals.shutdown();
       http?.close();
       await wire?.close();

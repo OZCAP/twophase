@@ -275,6 +275,9 @@ to the Home Screen** (Share → Add to Home Screen, open it from there, then Set
 | `ADMIN_TAILSCALE_ALLOW` | — | Required with `ADMIN_AUTH=tailscale`, e.g. `tag:admin-client` |
 | `TAILSCALE_SOCKET` | `/var/run/tailscale/tailscaled.sock` | tailscaled LocalAPI socket |
 | `APPROVAL_TIMEOUT_SECONDS` | `300` | A held statement fails after this long |
+| `AUDIT_RETENTION_DAYS` | `90` | Activity and decided approvals older than this are deleted (hourly); `0` keeps everything |
+| `BACKUP_INTERVAL_HOURS` | `24` | Copies the database to `DATA_DIR/backups` this often; `0` turns backups off |
+| `BACKUP_KEEP` | `7` | How many backups to keep |
 | `WEB_DIR` | `../web/dist` | Built UI to serve at `/` |
 | `VAPID_SUBJECT` | `mailto:admin@example.com` | Contact for push services. **Set this** |
 | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` | generated | Optional; keep stable or subscriptions break |
@@ -296,7 +299,8 @@ mode and an optional read-only login.
 
 ## Security notes / known gaps
 
-- **Database passwords** are stored in plaintext in SQLite. Protect `DATA_DIR`.
+- **Database passwords** are stored in plaintext in SQLite, and in its backups. The proxy keeps
+  `DATA_DIR` private to its own user (directory 0700, files 0600); protect copies you take elsewhere.
 - **Classification has limits.** It's conservative, but views and functions can hide behaviour:
   a view calling a volatile function reads as a read. The MCP read path is still enforced by
   `READ ONLY`. On the wire path, use least-privilege roles and the read-only login.

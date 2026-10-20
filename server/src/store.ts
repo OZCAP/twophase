@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, inArray, isNull, lt, or } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, isNull, lt, ne, or } from 'drizzle-orm';
 import type Database from 'better-sqlite3';
 import { openDatabase, type Db } from './db/index.js';
 import * as t from './db/schema.js';
@@ -268,6 +268,21 @@ export class Store {
       .set({ status: 'expired', decidedAt: new Date() })
       .where(eq(t.approvals.status, 'pending'))
       .run();
+  }
+
+  /** Deletes activity and decided approvals from before `before`. Pending approvals are kept. */
+  pruneHistory(before: Date): { audit: number; approvals: number } {
+    const audit = this.db.delete(t.audit).where(lt(t.audit.ts, before)).run().changes;
+    const approvals = this.db
+      .delete(t.approvals)
+      .where(and(lt(t.approvals.createdAt, before), ne(t.approvals.status, 'pending')))
+      .run().changes;
+    return { audit, approvals };
+  }
+
+  /** A consistent copy of the live database (SQLite's online backup), written to `file`. */
+  async backup(file: string): Promise<void> {
+    await this.sqlite.backup(file);
   }
 
   // ── audit ─────────────────────────────────────────────────

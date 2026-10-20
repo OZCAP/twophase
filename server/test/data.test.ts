@@ -33,3 +33,55 @@ describe('data directory permissions', () => {
     expect(mode(dir)).toBe(0o700);
   });
 });
+
+describe('housekeeping', () => {
+  const day = 24 * 3600_000;
+
+  it('prunes activity and decided approvals past the retention period, keeping pending ones', async () => {
+    const { Store } = await import('../src/store.js');
+    const { Housekeeping } = await import('../src/housekeeping.js');
+    const store = new Store(':memory:');
+    const sqlite = (store as any).sqlite;
+    // Raw rows without their database/client: only the history tables matter here.
+    sqlite.pragma('foreign_keys = OFF');
+    const old = Date.now() - 100 * day;
+    const recent = Date.now() - day;
+    const approval = (id: string, at: number, status: string) =>
+      sqlite.prepare(
+        `INSERT INTO approvals (id, database_id, user_id, surface, sql, statements, asked, operations, tables, status, created_at, expires_at)
+         VALUES (?, 'd', 'u', 'mcp', 'x', '[]', '[]', '[]', '[]', ?, ?, ?)`,
+      ).run(id, status, at, at);
+    approval('old-decided', old, 'approved');
+    approval('old-pending', old, 'pending');
+    approval('recent-decided', recent, 'denied');
+    const audit = (at: number) =>
+      sqlite.prepare(`INSERT INTO audit (ts, database_id, user_id, surface, sql, operations, tables, decision) VALUES (?, 'd', 'u', 'mcp', 'x', '[]', '[]', 'allowed')`).run(at);
+    audit(old);
+    audit(recent);
+
+    const hk = new Housekeeping(store, { dataDir: ':memory:', auditRetentionDays: 90, backupIntervalHours: 0, backupKeep: 7 });
+    expect(hk.prune()).toEqual({ audit: 1, approvals: 1 });
+    expect(sqlite.prepare('SELECT id FROM approvals ORDER BY id').all().map((r: any) => r.id)).toEqual(['old-pending', 'recent-decided']);
+    expect(sqlite.prepare('SELECT count(*) AS n FROM audit').get().n).toBe(1);
+    store.close();
+  });
+
+  it('writes private, rotated backups that open as a working database', async () => {
+    const { Store } = await import('../src/store.js');
+    const { Housekeeping } = await import('../src/housekeeping.js');
+    const dir = tempDir();
+    const store = new Store(dir);
+    store.setSetting('probe', 'ok');
+    const hk = new Housekeeping(store, { dataDir: dir, auditRetentionDays: 0, backupIntervalHours: 24, backupKeep: 2 });
+    const files: string[] = [];
+    for (let i = 0; i < 3; i++) files.push(await hk.backup(new Date(Date.UTC(2026, 0, 1 + i))));
+    expect(hk.backups()).toEqual(['proxy-20260102T000000Z.db', 'proxy-20260103T000000Z.db']);
+    expect(mode(path.join(dir, 'backups'))).toBe(0o700);
+    expect(mode(files[2])).toBe(0o600);
+    const Database = (await import('better-sqlite3')).default;
+    const restored = new Database(files[2], { readonly: true });
+    expect(restored.prepare("SELECT value FROM settings WHERE key = 'probe'").get()).toEqual({ value: 'ok' });
+    restored.close();
+    store.close();
+  });
+});
