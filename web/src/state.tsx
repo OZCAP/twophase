@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Api, type Approval, type AuditEntry, type Decision, type Grant, type Database, type ProxyStatus, type ProxyUser } from './api';
+import { Api, ApiError, type Approval, type AuditEntry, type Decision, type Grant, type Database, type ProxyStatus, type ProxyUser } from './api';
 
 import { closeApprovalNotification, shareTokenWithServiceWorker, syncPushSubscription } from './push';
 
@@ -140,7 +140,8 @@ export function ProxyProvider({ token, onLogout, children }: { token: string; on
                 break;
             }
           }, ctrl.signal);
-        } catch {
+        } catch (error) {
+          if (error instanceof ApiError && error.status === 401) { setLive(false); onLogout(); return; }
           /* reconnect below */
         }
         setLive(false);
@@ -150,7 +151,7 @@ export function ProxyProvider({ token, onLogout, children }: { token: string; on
       }
     })();
     return () => ctrl.abort();
-  }, [api, refreshApprovals, resolved, resumed]);
+  }, [api, refreshApprovals, resolved, resumed, onLogout]);
 
   // Trust windows end on their own (the server emits nothing): drop each one as it expires.
   useEffect(() => {

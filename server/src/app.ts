@@ -17,6 +17,7 @@ import { PushService } from './push/index.js';
 import { Housekeeping } from './housekeeping.js';
 import { Store } from './store.js';
 import { localApiWhois, type Whois } from './tailscaleAuth.js';
+import { AdminPassword } from './adminPassword.js';
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
 
@@ -38,8 +39,15 @@ export function createApp(config: Config, overrides: { whois?: Whois } = {}) {
   if (config.adminAuth === 'tailscale') {
     forgetAdminToken(store);
     adminAuth = { mode: 'tailscale', whois: overrides.whois ?? localApiWhois(config.tailscaleSocket) };
+  } else if (config.adminPassword) {
+    forgetAdminToken(store);
+    adminAuth = { mode: 'password' };
   } else {
     adminAuth = { mode: 'token', tokenHash: resolveAdminTokenHash(store, { adminToken: config.adminToken, reset: config.resetAdminToken }) };
+  }
+  if (!config.adminPassword) {
+    store.deleteSetting('admin_password_verifier');
+    store.deleteSetting('admin_password_sessions');
   }
 
   const mcp = mcpRouter({ store, gate, executors, config });
@@ -57,7 +65,10 @@ export function createApp(config: Config, overrides: { whois?: Whois } = {}) {
   app.get('/healthz', (_req, res) => {
     res.json({ ok: true });
   });
-  app.use('/admin/api', adminRouter({ store, approvals, executors, events, push, config, adminAuth }));
+  app.use('/admin/api', adminRouter({
+    store, approvals, executors, events, push, config, adminAuth,
+    password: config.adminPassword ? new AdminPassword(config.adminPassword, store) : undefined,
+  }));
   app.use(mcp.router);
   if (existsSync(config.webDir)) app.use(express.static(config.webDir));
 

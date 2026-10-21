@@ -42,9 +42,11 @@ services:
       - tailscale
     environment:
       HOST: 127.0.0.1
-      # Any verified tailnet device that can reach HTTPS may manage the app and approve.
+      # Verified tailnet devices can manage the app; optionally require a password too.
       # Control access with Tailscale grants/ACLs for port 443.
       ADMIN_AUTH: tailscale
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      ADMIN_PASSWORD_FILE: ${ADMIN_PASSWORD_FILE:-}
       TAILSCALE_SOCKET: /var/run/tailscale/tailscaled.sock
       APPROVAL_TIMEOUT_SECONDS: ${APPROVAL_TIMEOUT_SECONDS:-300}
       VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@example.com}

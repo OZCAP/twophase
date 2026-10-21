@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Api } from '../api';
+import { Api, type AuthInfo } from '../api';
 import { clearRefreshMarker, serviceWorkerVersion, currentSubscription, disablePush, enablePush, isIos, isStandalone, pushSupported, refreshApp } from '../push';
 import { useProxy } from '../state';
 import { attempt } from '../ui';
@@ -27,9 +27,9 @@ export function SettingsView() {
           <dt>Signed in</dt>
           <dd>
             {status?.auth.mode === 'tailscale'
-              ? `via Tailscale as ${status.auth.device}${status.auth.login ? ` (${status.auth.login})` : ''}`
+              ? `via Tailscale${status.auth.passwordRequired ? ' and password' : ''} as ${status.auth.device}${status.auth.login ? ` (${status.auth.login})` : ''}`
               : status
-                ? 'with admin token'
+                ? status.auth.mode === 'password' ? 'with management password' : 'with admin token'
                 : '…'}
           </dd>
           <dt>Push devices</dt>
@@ -38,7 +38,7 @@ export function SettingsView() {
       </section>
       <PushCard />
       <AppCard />
-      {status?.auth.mode !== 'tailscale' && (
+      {(status?.auth.mode !== 'tailscale' || status.auth.passwordRequired) && (
         <button
           className="btn deny"
           style={{ alignSelf: 'flex-start' }}
@@ -163,8 +163,9 @@ function PushCard() {
   );
 }
 
-export function Login({ onLogin }: { onLogin(token: string): void }) {
+export function Login({ info, onLogin }: { info: AuthInfo; onLogin(token: string): void }) {
   const [token, setToken] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -177,8 +178,12 @@ export function Login({ onLogin }: { onLogin(token: string): void }) {
           setBusy(true);
           setError(null);
           try {
-            await new Api(token.trim()).status();
-            onLogin(token.trim());
+            const credential = info.mode === 'token' ? token.trim() : '';
+            const api = new Api(credential);
+            if (info.passwordRequired) await api.login(password);
+            await api.status();
+            setPassword('');
+            onLogin(credential);
           } catch (err) {
             setError(err instanceof Error ? err.message : String(err));
           } finally {
@@ -188,11 +193,16 @@ export function Login({ onLogin }: { onLogin(token: string): void }) {
       >
         <img src="/icon.svg" width={48} height={48} alt="" />
         <h1>Twophase</h1>
-        <label>
+        {info.mode === 'token' && <label>
           Admin token
-          <input type="password" value={token} required autoFocus placeholder="tpa_…" onChange={(e) => setToken(e.target.value)} />
-        </label>
-        <p className="muted small">Printed in the server log on first start, or whatever you set as ADMIN_TOKEN.</p>
+          <input type="password" value={token} required autoFocus autoComplete="current-password" placeholder="tpa_…" onChange={(e) => setToken(e.target.value)} />
+        </label>}
+        {info.passwordRequired && <label>
+          Management password
+          <input type="password" value={password} required autoFocus={info.mode !== 'token'} autoComplete="current-password" onChange={(e) => setPassword(e.target.value)} />
+        </label>}
+        {info.mode === 'token' && <p className="muted small">Use the admin token configured by the proxy's operator.</p>}
+        {info.mode === 'tailscale' && <p className="muted small">Enter the management password to continue.</p>}
         {error && <p className="error">{error}</p>}
         <button className="btn primary" disabled={busy}>
           Sign in

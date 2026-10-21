@@ -11,6 +11,7 @@ import type { PushService } from './push/index.js';
 import { ENGINES } from './db/schema.js';
 import type { DatabaseConfig, DatabaseInput, Store } from './store.js';
 import { tailnetCallerIp, type TailscaleIdentity, type Whois } from './tailscaleAuth.js';
+import type { AdminPassword } from './adminPassword.js';
 
 export interface AdminDeps {
   store: Store;
@@ -20,9 +21,10 @@ export interface AdminDeps {
   push: PushService;
   config: Config;
   adminAuth: AdminAuth;
+  password?: AdminPassword;
 }
 
-export type AdminAuth = { mode: 'token'; tokenHash: string } | { mode: 'tailscale'; whois: Whois };
+export type AdminAuth = { mode: 'token'; tokenHash: string } | { mode: 'tailscale'; whois: Whois } | { mode: 'password' };
 
 class HttpError extends Error {
   constructor(
@@ -120,14 +122,20 @@ function publicDatabase({ password, readonlyPassword, ...db }: DatabaseConfig) {
 
 /**
  * Management API used by the web app: `/admin/api/*`. Authenticated by `Authorization: Bearer <admin token>`,
- * or in tailscale mode by which tailnet device the request comes from.
+ * a password session, or a verified tailnet device (plus a password session when configured).
  */
 export function adminRouter(deps: AdminDeps) {
   const { store, approvals, executors, events, push, config } = deps;
   const r = Router();
 
   const auth = deps.adminAuth;
+  const password = deps.password;
+  if (auth.mode === 'password' && !password) throw new Error('Password authentication requires a configured password');
+  r.use((_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
+  // Only the sign-in mechanism is public; operational status stays behind authentication.
+  r.get('/auth', (_req, res) => res.json({ mode: auth.mode, passwordRequired: !!password }));
   r.use(async (req, res, next) => {
+    if (auth.mode === 'password') return next();
     if (auth.mode === 'token') {
       const token = bearerToken(req);
       if (!token || !safeEqualHex(hashToken(token), auth.tokenHash)) {
@@ -138,10 +146,20 @@ export function adminRouter(deps: AdminDeps) {
     }
     const ip = tailnetCallerIp(req);
     const identity = ip ? await auth.whois(ip).catch(() => null) : null;
-    if (!identity) return res.status(401).json({ error: 'Open this through Tailscale to manage the proxy' });
+    if (!identity) return res.status(401).json({ error: 'Open this through Tailscale to manage the proxy', code: 'tailscale_required' });
     res.locals.identity = identity;
     next();
   });
+
+  if (password) {
+    r.post('/login', (req, res) => password.login(req, res));
+    r.use((req, res, next) => {
+      if (!password.session(req)) return res.status(401).json({ error: 'Sign in with the management password', code: 'password_required' });
+      if (!password.sameOrigin(req)) return res.status(403).json({ error: 'Use the management API from this site' });
+      next();
+    });
+    r.post('/logout', (req, res) => password.logout(req, res));
+  }
 
   const withNames = <T extends { databaseId: string; userId: string | null }>(items: T[]) => {
     const dbs = new Map(store.listDatabases().map((d) => [d.id, d.name]));
@@ -156,7 +174,7 @@ export function adminRouter(deps: AdminDeps) {
   r.get('/status', (_req, res) => {
     const identity = res.locals.identity as TailscaleIdentity | undefined;
     res.json({
-      auth: { mode: auth.mode, device: identity?.node ?? null, login: identity?.login ?? null },
+      auth: { mode: auth.mode, device: identity?.node ?? null, login: identity?.login ?? null, ...(password && { passwordRequired: true }) },
       version: '0.2.0',
       wire: { enabled: config.wire.enabled, port: config.wire.publicPort },
       mysqlWire: { enabled: config.mysqlWire.enabled, port: config.mysqlWire.publicPort },
@@ -172,8 +190,10 @@ export function adminRouter(deps: AdminDeps) {
     send('ready', {});
     const offs = EVENT_NAMES.map((name) => events.on(name, (payload: any) => send(name, 'databaseId' in payload ? withNames([payload])[0] : payload)));
     const ping = setInterval(() => res.write(': ping\n\n'), 20_000);
+    const stopWatching = password?.watch(req, res);
     req.on('close', () => {
       clearInterval(ping);
+      stopWatching?.();
       offs.forEach((off) => off());
     });
   });
@@ -349,7 +369,7 @@ export function adminRouter(deps: AdminDeps) {
 
   r.post('/approvals/:id/decision', (req, res) => {
     const identity = res.locals.identity as TailscaleIdentity | undefined;
-    const by = identity?.node ?? (auth.mode === 'token' ? 'admin token' : null);
+    const by = identity?.node ?? (auth.mode === 'password' ? 'management password' : auth.mode === 'token' ? 'admin token' : null);
     res.json(withNames([approvals.decide(req.params.id, parse(decision, req.body), by)])[0]);
   });
 

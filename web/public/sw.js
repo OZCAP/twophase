@@ -1,7 +1,7 @@
 /* Service worker: receives Web Push for approvals and lets you approve/deny from the notification. */
 
 /** Bump when this file changes, so diagnostics show which worker a device is running. */
-const SW_VERSION = 'nav-8';
+const SW_VERSION = 'auth-9';
 const ICON = '/icons/icon-192.png';
 const BADGE = '/icons/badge-96.png';
 
@@ -27,6 +27,7 @@ async function api(path, init = {}) {
   const token = await getToken();
   const res = await fetch(`/admin/api${path}`, {
     ...init,
+    credentials: 'same-origin', // Includes the HttpOnly management session when a password is required.
     headers: { ...(token && { authorization: `Bearer ${token}` }), 'content-type': 'application/json', ...init.headers },
   });
   if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `HTTP ${res.status}`);

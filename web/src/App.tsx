@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Api, ApiError } from './api';
+import { Api } from './api';
+import { detectAuth, type AuthGate } from './auth';
 import { ProxyProvider, savedToken, saveToken, useProxy, useRoute } from './state';
 import { Toasts } from './ui';
 import { ActivityView } from './views/Activity';
@@ -8,36 +9,21 @@ import { ClientsView } from './views/Clients';
 import { DatabasesView } from './views/Databases';
 import { Login, SettingsView } from './views/Settings';
 
-type Gate =
-  | { state: 'checking' }
-  | { state: 'ready'; token: string } // '' = authenticated by Tailscale, no token
-  | { state: 'login' }
-  | { state: 'blocked'; message: string };
-
-/** If the server authenticates via Tailscale, a token-less request already succeeds and no login is needed. */
-async function detectAuth(): Promise<Gate> {
-  try {
-    const status = await new Api('').status();
-    if (status.auth.mode === 'tailscale') {
-      saveToken(null);
-      return { state: 'ready', token: '' };
-    }
-  } catch (err) {
-    if (err instanceof ApiError && err.status === 403) return { state: 'blocked', message: err.message };
-  }
-  const token = savedToken();
-  return token ? { state: 'ready', token } : { state: 'login' };
-}
-
 export function App() {
-  const [gate, setGate] = useState<Gate>({ state: 'checking' });
-  useEffect(() => void detectAuth().then(setGate), []);
+  const [gate, setGate] = useState<AuthGate>({ state: 'checking' });
+  const check = useCallback(() => {
+    void detectAuth(savedToken()).then((next) => {
+      if (next.state === 'ready' && next.info.mode !== 'token') saveToken(null);
+      setGate(next);
+    });
+  }, []);
+  useEffect(check, [check]);
 
   const logout = useCallback(() => {
-    saveToken(null);
     setGate({ state: 'checking' });
-    void detectAuth().then(setGate);
-  }, []);
+    const request = gate.state === 'ready' && gate.info.passwordRequired ? new Api(gate.token).logout() : Promise.resolve();
+    void request.catch(() => {}).then(() => { saveToken(null); check(); });
+  }, [gate, check]);
 
   return (
     <>
@@ -48,9 +34,10 @@ export function App() {
       )}
       {gate.state === 'login' && (
         <Login
+          info={gate.info}
           onLogin={(t) => {
-            saveToken(t);
-            setGate({ state: 'ready', token: t });
+            saveToken(t || null);
+            check();
           }}
         />
       )}
@@ -60,6 +47,7 @@ export function App() {
             <h1>Not allowed</h1>
             <p>{gate.message}.</p>
             <p className="muted small">Connect through Tailscale and check that its access rules allow this device to reach the proxy.</p>
+            <button className="btn" onClick={check}>Try again</button>
           </div>
         </div>
       )}

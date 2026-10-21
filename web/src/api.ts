@@ -150,7 +150,7 @@ export interface Approval extends Named {
   asked: Access[];
   /** What a trust window already covered when the request came in (missing on older approvals). */
   trusted?: (Access & { grantId: string })[];
-  /** Who decided: a tailnet device, `admin token` or `trust window` (missing on older approvals). */
+  /** Who decided: a tailnet device, `admin token`, `management password` or `trust window`. */
   decidedBy?: string | null;
   /** The operator's note on a denial, sent to the client. */
   reason?: string | null;
@@ -187,7 +187,7 @@ export interface AuditEntry extends Named {
 
 export interface ProxyStatus {
   /** `tailscale`: no token; the server identified this device via `tailscale serve`. */
-  auth: { mode: 'token' | 'tailscale'; device: string | null; login: string | null };
+  auth: { mode: 'token' | 'tailscale' | 'password'; device: string | null; login: string | null; passwordRequired?: boolean };
   version: string;
   wire: { enabled: boolean; port: number };
   mysqlWire: { enabled: boolean; port: number };
@@ -203,12 +203,18 @@ export class ApiError extends Error {
   constructor(
     readonly status: number,
     message: string,
+    readonly code?: string,
   ) {
     super(message);
   }
 }
 
 const BASE = '/admin/api';
+
+export interface AuthInfo {
+  mode: ProxyStatus['auth']['mode'];
+  passwordRequired: boolean;
+}
 
 /**
  * Client for the proxy's admin API. Same-origin: Vite proxies it in dev, the server hosts this app in prod.
@@ -224,6 +230,7 @@ export class Api {
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const res = await fetch(`${BASE}${path}`, {
       method,
+      credentials: 'same-origin',
       headers: {
         ...this.authHeader,
         ...(body !== undefined && { 'content-type': 'application/json' }),
@@ -237,12 +244,15 @@ export class Api {
             .map(([k, v]) => `${k}: ${v.join(', ')}`)
             .join('; ')
         : '';
-      throw new ApiError(res.status, [err?.error ?? res.statusText, details].filter(Boolean).join(' — '));
+      throw new ApiError(res.status, [err?.error ?? res.statusText, details].filter(Boolean).join(' — '), err?.code);
     }
     return (res.status === 204 ? undefined : await res.json()) as T;
   }
 
   status = () => this.request<ProxyStatus>('GET', '/status');
+  auth = () => this.request<AuthInfo>('GET', '/auth');
+  login = (password: string) => this.request<void>('POST', '/login', { password });
+  logout = () => this.request<void>('POST', '/logout', {});
 
   databases = () => this.request<Database[]>('GET', '/databases');
   createDatabase = (d: Partial<DatabaseDraft>) => this.request<Database>('POST', '/databases', d);
@@ -284,6 +294,7 @@ export class Api {
    */
   async streamEvents(onEvent: (name: string, data: any) => void, signal: AbortSignal): Promise<void> {
     const res = await fetch(`${BASE}/events`, {
+      credentials: 'same-origin',
       headers: { ...this.authHeader, accept: 'text/event-stream' },
       signal,
     });

@@ -245,6 +245,7 @@ serves (`deploy/tailscale-serve.json`):
 Nothing is published on the host. Sign-in is by Tailscale identity
 ([below](#sign-in-with-tailscale-instead-of-an-admin-token)): every verified tailnet device
 that can reach HTTPS can manage the app. Control access with Tailscale grants/ACLs for port 443.
+Set `ADMIN_PASSWORD` in the untracked `.env` to also require a management password.
 
 - **Persistence.** The database lives in the `twophase-data` volume; the node's
   Tailscale identity lives in `tailscale-state`. Both containers use `restart: unless-stopped`,
@@ -298,6 +299,7 @@ For each admin request the proxy takes the caller's tailnet IP from `X-Forwarded
 `tailscale serve` sets and overwrites. It asks the local `tailscaled` which device that is.
 Any verified tailnet device that can reach the web/admin endpoint may manage the proxy and
 approve statements. Device identity is retained for status and approval attribution.
+When a management password is configured, that device must also sign in with the password.
 
 - **Tailscale grants/ACLs control admin access.** Grant HTTPS access only to devices you want
   to administer the proxy. A device with HTTPS access can approve its own statements. The Docker
@@ -308,6 +310,33 @@ approve statements. Device identity is retained for status and approval attribut
 - Switching to this mode deletes the stored admin token. Client tokens are unaffected.
 - In Docker, mount `/var/run/tailscale/tailscaled.sock` (or set `TAILSCALE_SOCKET`). The Tailscale
   compose file does this for you.
+
+### Require a management password
+
+Set `ADMIN_PASSWORD` in your private environment or untracked `.env` file, then recreate the
+app container (`docker compose up -d twophase`). The UI shows a password sign-in form. With
+`ADMIN_AUTH=tailscale`, both a verified tailnet identity and the password are required. Without
+Tailscale authentication, the password replaces admin-token sign-in; the old admin token is
+invalidated. Client tokens for MCP and database connections are unaffected.
+
+Alternatively, set `ADMIN_PASSWORD_FILE` to a file readable by the app, with the password as its
+contents. In Docker, mount that file read-only and use its container path. Set only one of
+`ADMIN_PASSWORD` and `ADMIN_PASSWORD_FILE`; a missing or empty password file prevents startup.
+Keep password files outside the repository.
+
+Sign-in creates an HttpOnly, SameSite=Strict cookie, marked Secure for network hostnames (local
+HTTP development on localhost is supported). Sessions last
+12 hours, are bound to the caller's IP, and survive container restarts in the persisted app
+database. Only salted password verifiers and hashed session tokens are stored. Changing the
+configured password revokes all sessions; signing out revokes that browser's session. Failed
+sign-ins are rate limited. The
+management API and event stream require the same session. The password is never stored in
+browser localStorage or shared with the service worker; its same-origin requests use the cookie.
+Use HTTPS when accessing password-protected management over a network.
+
+Leave both password settings unset to retain the existing login behavior. `GET /admin/api/auth`
+reports the sign-in method without exposing operational data; password sign-in and sign-out use
+`POST /admin/api/login` and `POST /admin/api/logout` with JSON bodies.
 
 ### Push notifications (PWA / Web Push)
 
@@ -334,6 +363,8 @@ to the Home Screen** (Share → Add to Home Screen, open it from there, then Set
 | `DATA_DIR` | `./data` | SQLite database |
 | `ADMIN_TOKEN` | generated | If unset, generated on first boot and printed once (only its hash is stored). `RESET_ADMIN_TOKEN=1` rotates it |
 | `ADMIN_AUTH` | `token` | `tailscale` = any verified tailnet device reaching the admin endpoint; access controlled by Tailscale grants/ACLs |
+| `ADMIN_PASSWORD` | unset | Optional management password: adds sign-in in Tailscale mode, replaces admin-token login otherwise |
+| `ADMIN_PASSWORD_FILE` | unset | Read the management password from this file instead; mount it read-only in Docker |
 | `TAILSCALE_SOCKET` | `/var/run/tailscale/tailscaled.sock` | tailscaled LocalAPI socket for admin identity; explicitly setting it also routes tailnet database connections through that node |
 | `APPROVAL_TIMEOUT_SECONDS` | `300` | A held statement fails after this long |
 | `AUDIT_RETENTION_DAYS` | `90` | Activity and decided approvals older than this are deleted (hourly); `0` keeps everything |

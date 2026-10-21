@@ -19,7 +19,7 @@ export default defineConfig({
   define: { __BUILD_TIME__: JSON.stringify(buildTime) },
   server: {
     proxy: {
-      '/admin/api': { target, changeOrigin: true },
+      '/admin/api': { target, changeOrigin: false },
       '/mcp': { target, changeOrigin: true },
     },
   },

@@ -18,6 +18,8 @@ services:
       - "127.0.0.1:6432:6432" # Postgres clients
       - "127.0.0.1:3307:3307" # MySQL / MariaDB clients
     environment:
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      ADMIN_PASSWORD_FILE: ${ADMIN_PASSWORD_FILE:-}
       APPROVAL_TIMEOUT_SECONDS: ${APPROVAL_TIMEOUT_SECONDS:-300}
       # ADMIN_TOKEN: ""          # optional; otherwise generated on first boot and printed to the log
       VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@example.com}
