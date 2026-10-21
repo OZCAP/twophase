@@ -1,4 +1,5 @@
 import mysql from 'mysql2';
+import { databaseStream } from '../../databaseSocket.js';
 import type { DatabaseConfig } from '../../store.js';
 import { capResultSize, jsonCell, uniqueNames } from '../results.js';
 import { QueryError, type Analysis, type Estimate, type Executor, type StatementAnalysis, type StatementResult, type TableInfo } from '../types.js';
@@ -58,6 +59,7 @@ export class MysqlExecutor implements Executor {
     return {
       host: this.db.host,
       port: this.db.port,
+      stream: databaseStream(this.db.host, this.db.port),
       user: this.db.user,
       password: this.db.password,
       database: this.db.database,

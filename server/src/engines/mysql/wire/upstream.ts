@@ -1,5 +1,6 @@
 import net from 'node:net';
 import tls from 'node:tls';
+import { openDatabaseSocket } from '../../../databaseSocket.js';
 import type { DatabaseConfig } from '../../../store.js';
 import { NATIVE, rsaEncryptPassword, scramble, SHA2 } from './auth.js';
 import { CAP, COM, isEof, lenencBytes, lenencInt, nulString, packet, PacketReader, parseErr, parseOk, Reader, type Message } from './protocol.js';
@@ -142,15 +143,11 @@ export const SESSION_CAPS = [
  * TLS / RSA), and auth switches.
  */
 export async function connectMysqlUpstream(db: DatabaseConfig, opts: UpstreamOptions): Promise<Upstream> {
-  let socket: net.Socket = net.connect({ host: db.host, port: db.port });
+  let socket: net.Socket = await openDatabaseSocket(db.host, db.port);
   socket.setNoDelay(true);
   const timer = setTimeout(() => socket.destroy(new UpstreamError('timed out connecting to the database')), CONNECT_TIMEOUT_MS);
   const q = new MessageQueue(socket);
   try {
-    await new Promise<void>((resolve, reject) => {
-      socket.once('connect', resolve);
-      socket.once('error', (e) => reject(new UpstreamError(e.message)));
-    });
     const first = await q.next();
     if (first.payload[0] === 0xff) {
       const e = parseErr(first.payload);

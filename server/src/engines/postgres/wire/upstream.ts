@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import net from 'node:net';
 import tls from 'node:tls';
+import { openDatabaseSocket } from '../../../databaseSocket.js';
 import type { DatabaseConfig } from '../../../store.js';
 import {
   cancelRequest,
@@ -37,17 +38,13 @@ export class UpstreamError extends Error {
 const md5 = (s: string | Buffer) => createHash('md5').update(s).digest('hex');
 
 async function openSocket(db: Pick<DatabaseConfig, 'host' | 'port' | 'sslmode'>): Promise<net.Socket> {
-  const raw = net.connect({ host: db.host, port: db.port });
+  const raw = await openDatabaseSocket(db.host, db.port);
   raw.setNoDelay(true);
   raw.setKeepAlive(true, 30_000);
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new UpstreamError(`timed out connecting to ${db.host}:${db.port}`)), 10_000);
-    raw.once('connect', () => (clearTimeout(timer), resolve()));
-    raw.once('error', (e) => (clearTimeout(timer), reject(new UpstreamError(`could not connect to ${db.host}:${db.port}: ${e.message}`))));
-  });
   if (db.sslmode === 'disable') return raw;
 
   raw.write(sslRequest());
+  raw.resume();
   const answer = await new Promise<string>((resolve, reject) => {
     raw.once('data', (d) => resolve(String.fromCharCode(d[0])));
     raw.once('error', reject);
@@ -111,6 +108,7 @@ export async function connectUpstream(
 ): Promise<UpstreamConnection> {
   const socket = await openSocket(db);
   const hs = handshakeReader(socket);
+  socket.resume();
   try {
     socket.write(startupMessage({ ...params, user: login.user, database: db.database }));
     const parameterStatus: Buffer[] = [];

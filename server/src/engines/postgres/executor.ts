@@ -1,4 +1,5 @@
 import pg from 'pg';
+import { databaseStream } from '../../databaseSocket.js';
 import Cursor from 'pg-cursor';
 import type { ConnectionOptions } from 'node:tls';
 import type { DatabaseConfig } from '../../store.js';
@@ -66,6 +67,7 @@ export class PostgresExecutor implements Executor {
     return {
       host: this.db.host,
       port: this.db.port,
+      stream: databaseStream(this.db.host, this.db.port),
       database: this.db.database,
       user: this.db.user,
       password: this.db.password,

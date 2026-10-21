@@ -257,6 +257,11 @@ that can reach HTTPS can manage the app. Control access with Tailscale grants/AC
   can take a few seconds while the certificate is issued.
 - The app runs as an unprivileged user, Tailscale in userspace mode (no `/dev/net/tun` or extra
   capabilities).
+- **Tailnet databases.** With `TAILSCALE_SOCKET` set (as in this Compose file), database
+  connections to full `.ts.net` hostnames and Tailscale IPs use the sidecar's LocalAPI dialer.
+  MagicDNS resolution and outbound ACLs therefore use the Twophase node's identity. Allow that
+  node to reach the database's TCP port. Other destinations use ordinary networking; database
+  TLS settings and hostname verification apply to both transports.
 
 ### Docker Compose without Tailscale
 
@@ -327,7 +332,7 @@ to the Home Screen** (Share → Add to Home Screen, open it from there, then Set
 | `DATA_DIR` | `./data` | SQLite database |
 | `ADMIN_TOKEN` | generated | If unset, generated on first boot and printed once (only its hash is stored). `RESET_ADMIN_TOKEN=1` rotates it |
 | `ADMIN_AUTH` | `token` | `tailscale` = any verified tailnet device reaching the admin endpoint; access controlled by Tailscale grants/ACLs |
-| `TAILSCALE_SOCKET` | `/var/run/tailscale/tailscaled.sock` | tailscaled LocalAPI socket |
+| `TAILSCALE_SOCKET` | `/var/run/tailscale/tailscaled.sock` | tailscaled LocalAPI socket for admin identity; explicitly setting it also routes tailnet database connections through that node |
 | `APPROVAL_TIMEOUT_SECONDS` | `300` | A held statement fails after this long |
 | `AUDIT_RETENTION_DAYS` | `90` | Activity and decided approvals older than this are deleted (hourly); `0` keeps everything |
 | `WEB_DIR` | `../web/dist` | Built UI to serve at `/` |
