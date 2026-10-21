@@ -1,5 +1,6 @@
 import http from 'node:http';
 import net from 'node:net';
+import dns from 'node:dns';
 import tls from 'node:tls';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -24,7 +25,11 @@ const track = (socket: net.Socket) => { sockets.add(socket); socket.once('close'
 
 beforeAll(async () => {
   directory = await mkdtemp(join(tmpdir(), 'twophase-dial-'));
-  server = http.createServer();
+  server = http.createServer((request, response) => {
+    expect(request.url).toBe('/localapi/v0/status');
+    response.setHeader('Content-Type', 'application/json');
+    response.end(JSON.stringify({ Peer: { fixture: { HostName: 'different-os-hostname', DNSName: `${host}.` } } }));
+  });
   server.on('upgrade', (request, raw) => {
     const socket = track(raw as net.Socket);
     const destination = String(request.headers['dial-host']);
@@ -125,6 +130,48 @@ it('keeps ordinary database connections on the native network', async () => {
   } finally { socket.destroy(); await new Promise<void>((resolve) => echo.close(() => resolve())); }
 });
 
+it('routes short MagicDNS names through the sidecar for both raw sockets and driver streams', async () => {
+  const echo = net.createServer((socket) => socket.pipe(socket));
+  await new Promise<void>((resolve) => echo.listen(0, '127.0.0.1', resolve));
+  const port = (echo.address() as net.AddressInfo).port;
+  const raw = await openDatabaseSocket('FIXTURE', port);
+  const stream = databaseStream('fixture', port)!();
+  try {
+    for (const socket of [raw, stream]) {
+      const received = once(socket, 'data');
+      socket.resume();
+      socket.write('short-name');
+      expect((await received)[0].toString()).toBe('short-name');
+    }
+    expect(dials.slice(-2)).toEqual([{ host, port }, { host, port }]);
+  } finally {
+    raw.destroy(); stream.destroy();
+    await new Promise<void>((resolve) => echo.close(() => resolve()));
+  }
+});
+
+it('preserves native DNS for short names absent from the tailnet', async () => {
+  const echo = net.createServer((socket) => socket.pipe(socket));
+  await new Promise<void>((resolve) => echo.listen(0, '127.0.0.1', resolve));
+  const lookup = vi.spyOn(dns, 'lookup').mockImplementation(((name: string, _options: dns.LookupAllOptions, callback: (error: null, addresses: dns.LookupAddress[]) => void) => {
+    expect(name).toBe('fixture-local');
+    callback(null, [{ address: '127.0.0.1', family: 4 }]);
+  }) as typeof dns.lookup);
+  const before = dials.length;
+  try {
+    const socket = await openDatabaseSocket('fixture-local', (echo.address() as net.AddressInfo).port);
+    const received = once(socket, 'data');
+    socket.write('native');
+    expect((await received)[0].toString()).toBe('native');
+    socket.destroy();
+    expect(dials.length).toBe(before);
+    expect(lookup).toHaveBeenCalled();
+  } finally {
+    lookup.mockRestore();
+    await new Promise<void>((resolve) => echo.close(() => resolve()));
+  }
+});
+
 it('retains TLS certificate and hostname verification over driver streams', async () => {
   const keyPath = join(directory, 'key.pem'), certPath = join(directory, 'cert.pem');
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', keyPath, '-out', certPath,
@@ -157,7 +204,7 @@ describe.skipIf(!pgAvailable)('PostgreSQL through userspace Tailscale', () => {
     try {
       proxy = await startProxy();
       const seeded = await proxy.seed(db);
-      await proxy.admin('PATCH', `/databases/${seeded.db.id}`, { host, sslmode: 'prefer' });
+      await proxy.admin('PATCH', `/databases/${seeded.db.id}`, { host: 'fixture', sslmode: 'prefer' });
       expect(await proxy.admin('POST', `/databases/${seeded.db.id}/test`)).toMatchObject({ ok: true });
       agent = await proxy.mcp(seeded.client.token, 'shop');
       expect((await agent.callTool({ name: 'query', arguments: { sql: 'SELECT 42 AS n' } })).isError).toBeFalsy();
@@ -177,7 +224,7 @@ for (const flavour of flavours) describe.skipIf(!available[flavour])(`${flavour}
     try {
       proxy = await startProxy();
       const seeded = await seedMysql(proxy, db);
-      await proxy.admin('PATCH', `/databases/${seeded.db.id}`, { host, sslmode: 'prefer' });
+      await proxy.admin('PATCH', `/databases/${seeded.db.id}`, { host: 'fixture', sslmode: 'prefer' });
       expect(await proxy.admin('POST', `/databases/${seeded.db.id}/test`)).toMatchObject({ ok: true });
       agent = await proxy.mcp(seeded.client.token, 'shop');
       expect((await agent.callTool({ name: 'query', arguments: { sql: 'SELECT 42 AS n' } })).isError).toBeFalsy();

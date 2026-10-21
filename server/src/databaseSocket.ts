@@ -13,8 +13,45 @@ export function isTailnetHost(host: string): boolean {
   return net.isIPv6(name) && name.startsWith('fd7a:115c:a1e0:');
 }
 
+function isShortHost(host: string): boolean {
+  return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i.test(host) && host.toLowerCase() !== 'localhost';
+}
+
 function tailnetSocket(host: string): string | undefined {
-  return isTailnetHost(host) ? process.env.TAILSCALE_SOCKET || undefined : undefined;
+  return isTailnetHost(host) || isShortHost(host) ? process.env.TAILSCALE_SOCKET || undefined : undefined;
+}
+
+/** Match MagicDNS names, which can differ from a device's operating-system hostname. */
+function shortTailnetHost(host: string, socketPath: string, signal?: AbortSignal): Promise<string | undefined> {
+  return new Promise((resolve, reject) => {
+    const request = http.get({
+      socketPath, path: '/localapi/v0/status', agent: false, signal,
+      headers: { Host: 'local-tailscaled.sock' },
+    }, (response) => {
+      if (response.statusCode !== 200) {
+        response.resume();
+        request.destroy(new Error(`Cannot resolve Tailscale short hostname (HTTP ${response.statusCode})`));
+        return;
+      }
+      let body = '';
+      response.setEncoding('utf8');
+      response.on('data', (chunk: string) => { body += chunk; });
+      response.once('error', (error) => { clearTimeout(timer); reject(error); });
+      response.once('end', () => {
+        clearTimeout(timer);
+        try {
+          const status = JSON.parse(body) as { Self?: { DNSName?: string }; Peer?: Record<string, { DNSName?: string }> };
+          const peers = [status.Self, ...Object.values(status.Peer ?? {})];
+          const name = peers.map((peer) => peer?.DNSName?.replace(/\.$/, '')).find((name) =>
+            name?.split('.')[0].toLowerCase() === host.toLowerCase(),
+          );
+          resolve(name);
+        } catch { reject(new Error('Invalid Tailscale status response while resolving short hostname')); }
+      });
+    });
+    const timer = setTimeout(() => request.destroy(new Error('Tailscale short hostname lookup timed out')), 10_000);
+    request.once('error', (error) => { clearTimeout(timer); reject(error); });
+  });
 }
 
 /** Dial through the sidecar's identity, including its MagicDNS and ACL enforcement. */
@@ -51,11 +88,9 @@ function dialTailnet(host: string, port: number, socketPath: string, signal?: Ab
 }
 
 /** Raw TCP only; the database drivers still perform their usual TLS/authentication. */
-export function openDatabaseSocket(host: string, port: number): Promise<net.Socket> {
-  const path = tailnetSocket(host);
-  if (path) return dialTailnet(host, port, path);
+function directSocket(host: string, port: number, signal?: AbortSignal): Promise<net.Socket> {
   return new Promise((resolve, reject) => {
-    const socket = net.connect({ host, port });
+    const socket = net.connect({ host, port, signal });
     const timer = setTimeout(() => socket.destroy(new Error(`Connection to ${host}:${port} timed out`)), 10_000);
     const onError = (error: Error) => { clearTimeout(timer); reject(error); };
     socket.once('error', onError);
@@ -65,6 +100,18 @@ export function openDatabaseSocket(host: string, port: number): Promise<net.Sock
       resolve(socket);
     });
   });
+}
+
+async function connectDatabase(host: string, port: number, path: string, signal?: AbortSignal): Promise<net.Socket> {
+  if (isTailnetHost(host)) return dialTailnet(host, port, path, signal);
+  const name = await shortTailnetHost(host, path, signal);
+  // Only names present in the peer list are tailnet destinations; Docker/local DNS still works.
+  return name ? dialTailnet(name, port, path, signal) : directSocket(host, port, signal);
+}
+
+export function openDatabaseSocket(host: string, port: number): Promise<net.Socket> {
+  const path = tailnetSocket(host);
+  return path ? connectDatabase(host, port, path) : directSocket(host, port);
 }
 
 /** pg and mysql2 require a synchronous stream factory, before the async dial completes. */
@@ -79,7 +126,7 @@ class TailnetStream extends Duplex {
   constructor(host: string, port: number, path: string) {
     super();
     // Both drivers install their error/data handlers synchronously after creating the stream.
-    this.ready = Promise.resolve().then(() => dialTailnet(host, port, path, this.abort.signal)).then((socket) => {
+    this.ready = Promise.resolve().then(() => connectDatabase(host, port, path, this.abort.signal)).then((socket) => {
       this.socket = socket;
       if (this.destroyed) { socket.destroy(); throw new Error('Connection closed during Tailscale dial'); }
       socket.setNoDelay(this.noDelay);

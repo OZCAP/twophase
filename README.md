@@ -259,6 +259,8 @@ that can reach HTTPS can manage the app. Control access with Tailscale grants/AC
   capabilities).
 - **Tailnet databases.** With `TAILSCALE_SOCKET` set (as in this Compose file), database
   connections to full `.ts.net` hostnames and Tailscale IPs use the sidecar's LocalAPI dialer.
+  Short MagicDNS names are matched against the sidecar's current peer list and expanded to
+  their full tailnet names. Other short names, including Docker service names, use normal DNS.
   MagicDNS resolution and outbound ACLs therefore use the Twophase node's identity. Allow that
   node to reach the database's TCP port. Other destinations use ordinary networking; database
   TLS settings and hostname verification apply to both transports.
