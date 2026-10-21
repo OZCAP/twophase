@@ -172,6 +172,9 @@ export function Login({ info, onLogin }: { info: AuthInfo; onLogin(token: string
   return (
     <div className="login">
       <form
+        id="management-sign-in"
+        name="management-sign-in"
+        autoComplete="on"
         className="card form"
         onSubmit={async (e) => {
           e.preventDefault();
@@ -182,7 +185,6 @@ export function Login({ info, onLogin }: { info: AuthInfo; onLogin(token: string
             const api = new Api(credential);
             if (info.passwordRequired) await api.login(password);
             await api.status();
-            setPassword('');
             onLogin(credential);
           } catch (err) {
             setError(err instanceof Error ? err.message : String(err));
@@ -193,16 +195,18 @@ export function Login({ info, onLogin }: { info: AuthInfo; onLogin(token: string
       >
         <img src="/icon.svg" width={48} height={48} alt="" />
         <h1>Twophase</h1>
+        <input id="management-username" name="username" type="text" autoComplete="username" defaultValue="admin" style={{ display: 'none' }} tabIndex={-1} />
         {info.mode === 'token' && <label>
           Admin token
-          <input type="password" value={token} required autoFocus autoComplete="current-password" placeholder="tpa_…" onChange={(e) => setToken(e.target.value)} />
+          <input id="admin-token" name="token" type="password" value={token} required autoFocus autoComplete="current-password" placeholder="tpa_…" onChange={(e) => setToken(e.target.value)} />
         </label>}
         {info.passwordRequired && <label>
           Management password
-          <input type="password" value={password} required autoFocus={info.mode !== 'token'} autoComplete="current-password" onChange={(e) => setPassword(e.target.value)} />
+          <input id="current-password" name="password" type="password" value={password} required autoFocus={info.mode !== 'token'} autoComplete="current-password" onChange={(e) => setPassword(e.target.value)} />
         </label>}
         {info.mode === 'token' && <p className="muted small">Use the admin token configured by the proxy's operator.</p>}
         {info.mode === 'tailscale' && <p className="muted small">Enter the management password to continue.</p>}
+        {info.passwordRequired && <p className="muted small">This browser stays signed in for 30 days. You can also save the password in your browser's password manager.</p>}
         {error && <p className="error">{error}</p>}
         <button className="btn primary" disabled={busy}>
           Sign in

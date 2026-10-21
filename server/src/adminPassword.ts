@@ -5,7 +5,7 @@ import type { Store } from './store.js';
 import { tailnetCallerIp } from './tailscaleAuth.js';
 
 const COOKIE = 'twophase-management';
-const LIFETIME = 12 * 60 * 60_000;
+const LIFETIME = 30 * 24 * 60 * 60_000;
 const MAX_SESSIONS = 256;
 const KDF = { N: 32768, r: 8, p: 1, maxmem: 64 * 1024 * 1024 };
 type Session = { hash: string; expires: number; caller: string };
@@ -119,10 +119,16 @@ export class AdminPassword {
 
   /** SSE streams must stop delivering data when their session expires or is revoked. */
   watch(req: Request, res: Response): () => void {
-    const session = this.session(req);
-    const check = () => { if (!this.session(req)) res.end(); };
-    const timer = setTimeout(check, Math.max(1, (session?.expires ?? Date.now()) - Date.now()));
+    let timer: ReturnType<typeof setTimeout>;
+    const check = () => {
+      clearTimeout(timer);
+      const session = this.session(req);
+      if (!session) { res.end(); return; }
+      // Node timers cannot exceed ~24.8 days. Re-arm until the 30-day session expires.
+      timer = setTimeout(check, Math.max(1, Math.min(session.expires - Date.now(), 2 ** 31 - 1)));
+    };
     this.listeners.add(check);
+    check();
     return () => { clearTimeout(timer); this.listeners.delete(check); };
   }
 }

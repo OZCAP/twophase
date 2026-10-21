@@ -45,6 +45,7 @@ describe('management password', () => {
     expect(login.headers.get('set-cookie')).toContain('HttpOnly');
     expect(login.headers.get('set-cookie')).toContain('SameSite=Strict');
     expect(login.headers.get('set-cookie')).toContain('Path=/admin/api');
+    expect(login.headers.get('set-cookie')).toContain('Max-Age=2592000');
     const cookie = cookieOf(login);
     expect(cookie).not.toContain(PASSWORD);
     const status = await fetch(`${p.base}/admin/api/status`, { headers: { cookie } });
@@ -119,9 +120,24 @@ describe('management password', () => {
     await fetch(`${p.base}/admin/api/logout`, { method: 'POST', headers: { cookie, 'content-type': 'application/json' } });
     expect((await finished).done).toBe(true);
     const second = await fetch(`${p.base}/admin/api/login`, json());
-    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 13 * 60 * 60_000);
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 31 * 24 * 60 * 60_000);
     try { expect((await fetch(`${p.base}/admin/api/status`, { headers: { cookie: cookieOf(second) } })).status).toBe(401); }
     finally { vi.restoreAllMocks(); }
+  });
+
+  it('remembers the browser on later days without retaining the password in the cookie', async () => {
+    const p = await proxy();
+    const login = await fetch(`${p.base}/admin/api/login`, json());
+    const cookie = cookieOf(login);
+    const now = Date.now();
+    const clock = vi.spyOn(Date, 'now');
+    try {
+      clock.mockReturnValue(now + 29 * 24 * 60 * 60_000);
+      expect((await fetch(`${p.base}/admin/api/status`, { headers: { cookie } })).status).toBe(200);
+      clock.mockReturnValue(now + 31 * 24 * 60 * 60_000);
+      expect((await fetch(`${p.base}/admin/api/status`, { headers: { cookie } })).status).toBe(401);
+      expect(cookie).not.toContain(PASSWORD);
+    } finally { clock.mockRestore(); }
   });
 
   it('preserves sessions across restarts, stores only hashes, and revokes them when the password changes', async () => {
@@ -153,7 +169,7 @@ describe('management password', () => {
     const reader = stream.body!.getReader();
     await reader.read();
     const finished = reader.read();
-    await vi.advanceTimersByTimeAsync(12 * 60 * 60_000);
+    await vi.advanceTimersByTimeAsync(30 * 24 * 60 * 60_000);
     expect((await finished).done).toBe(true);
   });
 

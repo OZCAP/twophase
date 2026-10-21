@@ -326,12 +326,13 @@ Keep password files outside the repository.
 
 Sign-in creates an HttpOnly, SameSite=Strict cookie, marked Secure for network hostnames (local
 HTTP development on localhost is supported). Sessions last
-12 hours, are bound to the caller's IP, and survive container restarts in the persisted app
+30 days, are bound to the caller's IP, and survive browser and container restarts in the persisted app
 database. Only salted password verifiers and hashed session tokens are stored. Changing the
 configured password revokes all sessions; signing out revokes that browser's session. Failed
 sign-ins are rate limited. The
 management API and event stream require the same session. The password is never stored in
 browser localStorage or shared with the service worker; its same-origin requests use the cookie.
+The sign-in form supports browser password managers for saving and autofilling the password.
 Use HTTPS when accessing password-protected management over a network.
 
 Leave both password settings unset to retain the existing login behavior. `GET /admin/api/auth`
