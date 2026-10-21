@@ -392,14 +392,20 @@ database:
 ```sh
 docker run -d --name mcpp-test-postgres -e POSTGRES_USER=mcptest -e POSTGRES_PASSWORD=mcptest \
   -e POSTGRES_DB=shop -p 127.0.0.1:55432:5432 postgres:17-alpine
-# or point PG_TEST_URL at another superuser URL
 docker run -d --name twophase-test-mysql -e MYSQL_ROOT_PASSWORD=roottest -p 127.0.0.1:53306:3306 mysql:8.4
 docker run -d --name twophase-test-mariadb -e MARIADB_ROOT_PASSWORD=roottest -p 127.0.0.1:53307:3306 mariadb:11
-# or MYSQL_TEST_URL / MARIADB_TEST_URL (root URLs). The wire tests also run the real mysql and
-# mariadb command-line clients from those images via docker.
+# The wire tests also run mysql and mariadb command-line clients from those images via Docker.
 ```
 
 Tests for an engine whose server isn't reachable are skipped.
+
+Tests use only the local ports and public dummy credentials shown above. `PG_TEST_URL`,
+`MYSQL_TEST_URL`, and `MARIADB_TEST_URL` overrides are rejected unless they exactly match these
+fixture URLs, before any database connection is attempted. Do not forward these ports to real
+databases or reuse the dummy credentials outside disposable containers. Each integration test
+creates temporary databases and generated logins, and runs the app with an in-memory store.
+Tailscale transport tests use a temporary mock LocalAPI socket and synthetic hostnames; they
+do not contact a real tailnet. CI starts disposable database services and needs no real secrets.
 
 ### Database (Drizzle ORM)
 

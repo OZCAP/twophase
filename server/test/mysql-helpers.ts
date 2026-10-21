@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import mysql from 'mysql2/promise';
 import { unavailable, type TestProxy } from './helpers.js';
+import { FIXTURE_DATABASE_URLS } from './fixtures.js';
 
 export type Flavour = 'mysql' | 'mariadb';
 
@@ -8,8 +9,8 @@ const range = (n: number) => Array.from({ length: n }, (_, i) => i + 1);
 
 /** Root connections to the throwaway test servers (see README → Development). */
 export const MYSQL_ADMIN_URL: Record<Flavour, string> = {
-  mysql: process.env.MYSQL_TEST_URL ?? 'mysql://root:roottest@127.0.0.1:53306/mysql',
-  mariadb: process.env.MARIADB_TEST_URL ?? 'mysql://root:roottest@127.0.0.1:53307/mysql',
+  mysql: FIXTURE_DATABASE_URLS.MYSQL_TEST_URL,
+  mariadb: FIXTURE_DATABASE_URLS.MARIADB_TEST_URL,
 };
 
 export async function mysqlAvailable(flavour: Flavour): Promise<boolean> {

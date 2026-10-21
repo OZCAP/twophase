@@ -5,11 +5,12 @@ import pg from 'pg';
 import { createApp } from '../src/app.js';
 import { loadConfig, type Config } from '../src/config.js';
 import type { Whois } from '../src/tailscaleAuth.js';
+import { FIXTURE_DATABASE_URLS } from './fixtures.js';
 
 export const ADMIN = 'test-admin-token';
 
 /** Superuser connection to the throwaway test server (see README → Development). */
-export const PG_ADMIN_URL = process.env.PG_TEST_URL ?? 'postgresql://mcptest:mcptest@127.0.0.1:55432/shop';
+export const PG_ADMIN_URL = FIXTURE_DATABASE_URLS.PG_TEST_URL;
 
 /**
  * Integration tests skip an engine whose test server isn't reachable, unless

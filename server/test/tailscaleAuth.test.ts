@@ -4,8 +4,8 @@ import { tailnetCallerIp, type TailscaleIdentity } from '../src/tailscaleAuth.js
 import { startProxy } from './helpers.js';
 
 const DEVICES: Record<string, TailscaleIdentity> = {
-  '100.0.0.1': { ip: '100.0.0.1', node: 'iphone', tags: ['tag:admin-client'], login: null },
-  '100.0.0.2': { ip: '100.0.0.2', node: 'staging', tags: ['tag:admin-accessible'], login: null },
+  '100.0.0.1': { ip: '100.0.0.1', node: 'phone', tags: ['tag:fixture-client'], login: null },
+  '100.0.0.2': { ip: '100.0.0.2', node: 'staging', tags: ['tag:fixture-server'], login: null },
   '100.0.0.3': { ip: '100.0.0.3', node: 'laptop', tags: [], login: 'alice@github' },
 };
 
