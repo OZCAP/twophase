@@ -54,12 +54,16 @@ export interface StatementAnalysis {
   flags: string[];
   /** For PREPARE: the analysis of the prepared query, to reuse at EXECUTE. */
   prepared?: { name: string; analysis: StatementAnalysis };
+  /** Session timeout assignment, validated against the database's configured limit. */
+  timeout?: string | null;
 }
 
 export interface Analysis {
   statements: StatementAnalysis[];
   /** Parse error, if the SQL could not be parsed (the analysis then contains one `admin` statement). */
   error: string | null;
+  /** A safety restriction that rules and trust windows cannot override. */
+  safetyError?: string;
 }
 
 export interface TableInfo {
@@ -110,6 +114,8 @@ export interface Executor {
   readonly placeholder: '$1' | '?';
   /** Classify SQL as this database would run it (with its function catalog, quoting mode, …). */
   analyze(sql: string): Promise<Analysis>;
+  /** Refresh metadata checks, including for prepared statements and after approval waits. */
+  validate(analysis: Analysis): Promise<Analysis>;
   /** Runs already-approved statements: read-only and rolled back, or as one committed transaction. */
   run(statements: StatementAnalysis[], opts: { readOnly: boolean; params?: unknown[]; maxRows: number }): Promise<StatementResult[]>;
   /** Planner estimate of rows a write would touch (plain EXPLAIN — nothing is executed). */

@@ -2,6 +2,8 @@ import { randomInt } from 'node:crypto';
 import net from 'node:net';
 import type { Gate } from '../../../gate.js';
 import { canOnlyRead } from '../../../policy.js';
+import type { EventBus } from '../../../events.js';
+import { timeoutMillis } from '../../safety.js';
 import type { Store } from '../../../store.js';
 import { ENGINE_LABELS, type ExecutorRegistry } from '../../index.js';
 import {
@@ -28,6 +30,7 @@ export interface WireDeps {
   store: Store;
   gate: Gate;
   executors: ExecutorRegistry;
+  events: EventBus;
   approvalTimeoutSeconds: number;
 }
 
@@ -80,6 +83,14 @@ function validateParams(params: Record<string, string>) {
 /** Postgres wire-protocol endpoint: `postgresql://<client>:<token>@proxy:6432/<db-slug>`. */
 export function startWireListener(deps: WireDeps, opts: { host: string; port: number }) {
   const sessions = new Map<string, { session: WireSession; db: { host: string; port: number; sslmode: any }; upstreamKey: { pid: number; secret: number } }>();
+  const unsubscribe = deps.events.on('access.changed', ({ userId, databaseId }) => {
+    for (const entry of sessions.values()) {
+      if (entry.session.user.id === userId || entry.session.db.id === databaseId) {
+        void sendUpstreamCancel(entry.db, entry.upstreamKey).catch(() => {});
+        entry.session.close();
+      }
+    }
+  });
 
   const server = net.createServer((socket) => {
     socket.setNoDelay(true);
@@ -198,7 +209,7 @@ export function startWireListener(deps: WireDeps, opts: { host: string; port: nu
       const serverOptions = [
         // A statement held for approval inside a transaction keeps its locks; don't let the session linger past that.
         `-c idle_in_transaction_session_timeout=${(deps.approvalTimeoutSeconds + 60) * 1000}`,
-        ...(options.statement_timeout ? [`-c statement_timeout=${options.statement_timeout}`] : []),
+        `-c statement_timeout=${Math.min(db.statementTimeoutMs, timeoutMillis(options.statement_timeout ?? '') ?? db.statementTimeoutMs)}`,
         ...(options.lock_timeout ? [`-c lock_timeout=${options.lock_timeout}`] : []),
         ...(readOnly ? ['-c default_transaction_read_only=on'] : []),
       ].join(' ');
@@ -257,6 +268,7 @@ export function startWireListener(deps: WireDeps, opts: { host: string; port: nu
       });
     },
     async close() {
+      unsubscribe();
       for (const { session } of sessions.values()) session.close();
       await new Promise<void>((r) => server.close(() => r()));
     },

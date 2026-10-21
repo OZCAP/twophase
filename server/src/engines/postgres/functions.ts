@@ -5,10 +5,10 @@ import type { Operation } from '../types.js';
  * effects. Classification, in order:
  *   1. explicit denylist → admin (backend control, server files, dblink, SQL-in-a-string, …)
  *   2. explicit write list → write (sequences, NOTIFY, advisory locks)
- *   3. explicit safe-volatile list → read (random, clock_timestamp, pg_sleep, …)
- *   4. catalog volatility: any volatile overload → write, otherwise read. Postgres refuses data
- *      changes inside STABLE/IMMUTABLE SQL and PL/pgSQL functions, so volatility is a sound signal.
- *   5. no catalog entry → write (unknown functions ask rather than slip through)
+ *   3. non-core/unknown functions → opaque (never executed through the proxy)
+ *   4. verified core functions: known harmless volatile calls → read; other volatile calls → write
+ * STABLE/IMMUTABLE user functions may invoke writing VOLATILE functions, so their volatility
+ * declarations are not a safety boundary.
  */
 
 const DENY_EXACT = new Set([
@@ -77,12 +77,13 @@ const FALLBACK_NON_VOLATILE = new Set(
   ).split(' '),
 );
 
-/** Volatility per function name across all schemas: true if any overload is volatile. */
-export type FunctionCatalog = Map<string, boolean>;
+/** Core volatility, or opaque if any overload is supplied outside PostgreSQL core. */
+export type FunctionCatalog = Map<string, boolean | 'opaque'>;
 
 export interface FunctionVerdict {
   op: Operation;
   reason: string;
+  opaque?: boolean;
 }
 
 export function classifyFunction(nameParts: string[], catalog: FunctionCatalog | null): FunctionVerdict {
@@ -90,16 +91,19 @@ export function classifyFunction(nameParts: string[], catalog: FunctionCatalog |
   const schema = nameParts.length > 1 ? nameParts[nameParts.length - 2].toLowerCase() : null;
   const qualified = schema ? `${schema}.${name}` : name;
 
+  // set_config could otherwise disable enforced timeouts or change parser/privilege settings.
+  if (name === 'set_config') return { op: 'admin', reason: 'set_config() bypasses session safeguards', opaque: true };
   if (DENY_EXACT.has(name) || DENY_PATTERNS.some((p) => p.test(name))) return { op: 'admin', reason: `${qualified}() is a privileged function` };
-  if (WRITE_EXACT.has(name) || WRITE_PATTERNS.some((p) => p.test(name))) return { op: 'write', reason: `${qualified}() has side effects` };
-  if (SAFE_VOLATILE.has(name)) return { op: 'read', reason: '' };
-
-  const key = schema && schema !== 'pg_catalog' ? qualified : name;
+  const exactKey = schema ? qualified : name;
   if (catalog) {
-    const volatile = catalog.get(key) ?? catalog.get(name);
-    if (volatile === undefined) return { op: 'write', reason: `${qualified}() is unknown, so it may have side effects` };
+    const volatile = catalog.get(exactKey);
+    if (volatile === 'opaque' || volatile === undefined) return { op: 'write', reason: `${qualified}() has uninspectable effects`, opaque: true };
+    if (WRITE_EXACT.has(name) || WRITE_PATTERNS.some((p) => p.test(name))) return { op: 'write', reason: `${qualified}() has side effects` };
+    if ((!schema || schema === 'pg_catalog') && SAFE_VOLATILE.has(name)) return { op: 'read', reason: '' };
     return volatile ? { op: 'write', reason: `${qualified}() is volatile and may modify data` } : { op: 'read', reason: '' };
   }
+  if ((!schema || schema === 'pg_catalog') && (WRITE_EXACT.has(name) || WRITE_PATTERNS.some((p) => p.test(name)))) return { op: 'write', reason: `${qualified}() has side effects` };
+  if ((!schema || schema === 'pg_catalog') && SAFE_VOLATILE.has(name)) return { op: 'read', reason: '' };
   if ((!schema || schema === 'pg_catalog') && FALLBACK_NON_VOLATILE.has(name)) return { op: 'read', reason: '' };
-  return { op: 'write', reason: `${qualified}() may have side effects` };
+  return { op: 'write', reason: `${qualified}() may have side effects`, opaque: true };
 }

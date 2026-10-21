@@ -47,12 +47,11 @@ describe.each(flavours)('hosted MCP against real %s', (flavour) => {
       await exec.close();
     });
 
-    it('stored functions need approval, even ones declared READS SQL DATA', async () => {
-      const call = query('SELECT order_total(1) AS t');
-      const pending = await proxy.nextPending();
-      expect(pending.verbs).toEqual(['function']);
-      await proxy.admin('POST', `/approvals/${pending.id}/decision`, { decision: 'approve' });
-      expect(jsonOf(await call).statements[0].rows[0].t).toBe('6000');
+    it('refuses stored functions even when declared READS SQL DATA', async () => {
+      const result = await query('SELECT order_total(1) AS t');
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toMatch(/indirect effects/);
+      expect(await proxy.admin('GET', '/approvals?status=pending')).toEqual([]);
     });
 
     it('holds a write until approved, then commits it — with a planner estimate', async () => {

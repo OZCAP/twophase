@@ -7,6 +7,8 @@ export interface EventMap {
   'grant.created': Grant;
   'grant.revoked': { id: string };
   audit: AuditEntry;
+  /** Internal notification: close authenticated sessions when credentials/access change. */
+  'access.changed': { userId?: string; databaseId?: string };
 }
 
 export type EventName = keyof EventMap;

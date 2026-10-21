@@ -131,10 +131,10 @@ describe.each(flavours)('complex statements against real %s', (flavour) => {
     it('wire: a batch with an admin statement at the end is refused whole; nothing before it runs', async () => {
       await expect(c.query("INSERT INTO audit_log (action) VALUES ('before-admin'); SET GLOBAL max_connections = 500")).rejects.toMatchObject({
         errno: 1227,
-        message: expect.stringMatching(/admin is not permitted/),
+        message: expect.stringMatching(/not atomic/),
       });
       expect(await count("action = 'before-admin'", 'audit_log')).toBe(0);
-      expect(textOf(await query('SELECT 1; FLUSH PRIVILEGES'))).toMatch(/admin is not permitted/);
+      expect(textOf(await query('SELECT 1; FLUSH PRIVILEGES'))).toMatch(/not atomic/);
     });
   });
 });

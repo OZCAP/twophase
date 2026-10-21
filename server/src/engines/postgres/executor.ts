@@ -4,8 +4,9 @@ import type { ConnectionOptions } from 'node:tls';
 import type { DatabaseConfig } from '../../store.js';
 import { capResultSize, jsonCell, uniqueNames } from '../results.js';
 import { QueryError, type Analysis, type Estimate, type Executor, type StatementAnalysis, type StatementResult, type TableInfo } from '../types.js';
-import { analyze } from './analyze.js';
+import { analyze, type AnalyzeContext } from './analyze.js';
 import type { FunctionCatalog } from './functions.js';
+import { allStatements, opaqueRelationError, referencedTables, safetyError, timeoutMillis } from '../safety.js';
 
 export { QueryError };
 
@@ -14,7 +15,6 @@ const TYPE_NAMES: Record<number, string> = {
   114: 'json', 700: 'float4', 701: 'float8', 1042: 'bpchar', 1043: 'varchar', 1082: 'date', 1083: 'time',
   1114: 'timestamp', 1184: 'timestamptz', 1186: 'interval', 1700: 'numeric', 2950: 'uuid', 3802: 'jsonb',
 };
-const CATALOG_TTL_MS = 5 * 60_000;
 
 /** node-postgres TLS options for an sslmode (`prefer` is resolved by probing; see `ssl()`). */
 export function tlsFor(db: Pick<DatabaseConfig, 'sslmode' | 'host'>): ConnectionOptions | false {
@@ -38,7 +38,6 @@ export class PostgresExecutor implements Executor {
   readonly placeholder = '$1';
   private pool: pg.Pool | null = null;
   private resolvedSsl: Promise<ConnectionOptions | false> | null = null;
-  private catalog: { at: number; value: Promise<FunctionCatalog | null> } | null = null;
 
   constructor(readonly db: DatabaseConfig) {}
 
@@ -96,35 +95,55 @@ export class PostgresExecutor implements Executor {
     }
   }
 
-  /** Function volatility for the analyzer, cached for 5 minutes (and reset after DDL). */
+  /** Refresh on each analysis: a stale catalog could miss newly created shadow functions. */
   functionCatalog(): Promise<FunctionCatalog | null> {
-    if (this.catalog && Date.now() - this.catalog.at < CATALOG_TTL_MS) return this.catalog.value;
-    const value = this.withClient(async (c) => {
-      const { rows } = await c.query<{ nspname: string; proname: string; volatile: boolean }>(
-        `SELECT n.nspname, p.proname, bool_or(p.provolatile = 'v') AS volatile
+    return this.withClient(async (c) => {
+      const { rows } = await c.query<{ nspname: string; proname: string; volatile: boolean; opaque: boolean }>(
+        `SELECT n.nspname, p.proname, bool_or(p.provolatile = 'v') AS volatile,
+                bool_or(n.nspname <> 'pg_catalog' OR p.oid >= 16384) AS opaque
            FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace GROUP BY 1, 2`,
       );
       const map: FunctionCatalog = new Map();
       for (const r of rows) {
-        map.set(`${r.nspname}.${r.proname}`, r.volatile);
-        map.set(r.proname, (map.get(r.proname) ?? false) || r.volatile);
+        const schema = r.nspname.toLowerCase();
+        const name = r.proname.toLowerCase();
+        const value = r.opaque ? 'opaque' : r.volatile;
+        map.set(`${schema}.${name}`, map.get(`${schema}.${name}`) === 'opaque' ? 'opaque' : value);
+        map.set(name, map.get(name) === 'opaque' || r.opaque ? 'opaque' : !!map.get(name) || r.volatile);
       }
       return map;
     }).catch(() => null);
-    this.catalog = { at: Date.now(), value };
-    return value;
   }
 
-  async analyze(sql: string): Promise<Analysis> {
-    return analyze(sql, { catalog: await this.functionCatalog() });
+  async analyze(sql: string, ctx: Pick<AnalyzeContext, 'prepared'> = {}): Promise<Analysis> {
+    const catalog = await this.functionCatalog();
+    const analysis = analyze(sql, { ...ctx, catalog });
+    if (!catalog) return { ...analysis, safetyError: 'Cannot verify the database function catalog' };
+    return this.validate(analysis);
+  }
+
+  async validate(analysis: Analysis): Promise<Analysis> {
+    let error = safetyError(analysis);
+    for (const s of allStatements(analysis.statements)) {
+      if (s.timeout !== undefined) {
+        const timeout = s.timeout === null ? null : timeoutMillis(s.timeout);
+        if (timeout === null || timeout > this.db.statementTimeoutMs) error ??= `statement_timeout must be positive and no greater than ${this.db.statementTimeoutMs} ms`;
+      }
+    }
+    if (!error && referencedTables(analysis).length) {
+      try {
+        const relations = await this.withClient(async (c) => (await c.query<{ schema: string; name: string }>(
+          `SELECT n.nspname AS schema, c.relname AS name FROM pg_class c
+           JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind IN ('v','f')`,
+        )).rows);
+        error = opaqueRelationError(analysis, relations);
+      } catch { error = 'Cannot verify database relation metadata'; }
+    }
+    return error ? { ...analysis, safetyError: error } : analysis;
   }
 
   tableName(t: TableInfo): string {
     return `${t.schema}.${t.name}`;
-  }
-
-  invalidateCatalog() {
-    this.catalog = null;
   }
 
   /**
@@ -136,6 +155,8 @@ export class PostgresExecutor implements Executor {
     statements: StatementAnalysis[],
     opts: { readOnly: boolean; params?: unknown[]; maxRows: number },
   ): Promise<StatementResult[]> {
+    const checked = await this.validate({ statements, error: null });
+    if (checked.safetyError) throw new QueryError(checked.safetyError, '0A000');
     const timeout = Math.max(1, Math.round(this.db.statementTimeoutMs));
     const autocommit = statements.length === 1 && statements[0].flags.includes('no_transaction');
     // Anything but a plain read may leave session state behind (temp tables, …): don't reuse that connection.
@@ -152,7 +173,6 @@ export class PostgresExecutor implements Executor {
       await c.query(opts.readOnly ? 'ROLLBACK' : 'COMMIT');
       return out;
     }, discard || autocommit);
-    if (statements.some((s) => s.kind === 'ddl')) this.invalidateCatalog();
     return capResultSize(results);
   }
 
@@ -200,6 +220,8 @@ export class PostgresExecutor implements Executor {
   }
 
   async explain(text: string): Promise<string> {
+    const checked = await this.analyze(`EXPLAIN ${text}`);
+    if (checked.safetyError) throw new QueryError(checked.safetyError, '0A000');
     return this.withClient(async (c) => {
       await c.query('BEGIN READ ONLY');
       await c.query(`SET LOCAL statement_timeout = ${this.db.statementTimeoutMs}`);

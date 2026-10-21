@@ -246,4 +246,13 @@ describe('function catalog', () => {
   it('the denylist wins over the catalog', () => {
     expect(one('SELECT pg_terminate_backend(1)', { catalog: new Map([['pg_terminate_backend', false]]) }).kind).toBe('admin');
   });
+  it('does not trust a user function named like a harmless built-in', () => {
+    const shadow: FunctionCatalog = new Map<string, boolean | 'opaque'>([
+      ['public.gen_random_uuid', 'opaque'], ['gen_random_uuid', 'opaque'], ['pg_catalog.gen_random_uuid', true],
+    ]);
+    expect(one('SELECT public.gen_random_uuid()', { catalog: shadow }).flags).toContain('opaque_function');
+    expect(one('SELECT gen_random_uuid()', { catalog: shadow }).flags).toContain('opaque_function');
+    expect(one('SELECT pg_catalog.gen_random_uuid()', { catalog: shadow }).kind).toBe('read');
+    expect(one('EXPLAIN SELECT public.gen_random_uuid()', { catalog: shadow }).flags).toContain('opaque_function');
+  });
 });

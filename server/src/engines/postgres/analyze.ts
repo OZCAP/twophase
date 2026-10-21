@@ -210,6 +210,7 @@ class Collector {
     const parts = stringList(funcname);
     if (parts.length === 0) return;
     const verdict = classifyFunction(parts, this.catalog);
+    if (verdict.opaque) this.flags.add('opaque_function');
     if (verdict.op !== 'read') this.plain(verdict.op, verdict.op === 'admin' ? 'admin' : 'function', verdict.reason);
   }
 
@@ -363,7 +364,7 @@ function classify(stmt: Node, ctx: AnalyzeContext): Partial {
       }
       // Plain EXPLAIN only plans: reads the catalog for every table the statement mentions.
       const tables = inner.accesses.filter((a) => a.table).map((a) => ({ op: 'read' as const, verb: 'select' as const, table: a.table }));
-      return { command: `EXPLAIN ${inner.command}`, kind: 'read', accesses: dedupe([{ op: 'read', verb: 'select', table: null }, ...tables]), flags: [] };
+      return { command: `EXPLAIN ${inner.command}`, kind: 'read', accesses: dedupe([{ op: 'read', verb: 'select', table: null }, ...tables]), flags: inner.flags.filter((f) => f === 'opaque_function') };
     }
     case 'CopyStmt': {
       if (s.is_program || s.filename) return admin('COPY', s.is_program ? 'copy_program' : 'copy_server_file');
@@ -399,7 +400,9 @@ function classify(stmt: Node, ctx: AnalyzeContext): Partial {
         const v = constText(s.args?.[0])?.toLowerCase().replace(/[-_]/g, '');
         if (s.kind === 'VAR_SET_VALUE' && v !== 'utf8') return admin('SET client_encoding', 'non_utf8_encoding');
       }
-      return session(`${s.kind === 'VAR_RESET' ? 'RESET' : 'SET'} ${name}`, flags);
+      const setting = session(`${s.kind === 'VAR_RESET' ? 'RESET' : 'SET'} ${name}`, flags);
+      if (name === 'statement_timeout' && s.kind !== 'VAR_RESET' && s.kind !== 'VAR_SET_DEFAULT') setting.timeout = constText(s.args?.[0]);
+      return setting;
     }
     case 'TransactionStmt': {
       const command = TXN_COMMANDS[s.kind] ?? 'TRANSACTION';

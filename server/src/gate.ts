@@ -4,6 +4,7 @@ import type { EventBus } from './events.js';
 import { evaluateAnalysis, grantCovers, grantsCover } from './policy.js';
 import type { SessionInfo, TrustedAccess } from './db/schema.js';
 import type { Approval, AuditDecision, DatabaseConfig, ProxyUser, Store, Surface } from './store.js';
+import { safetyError } from './engines/safety.js';
 
 export interface GateRequest {
   surface: Surface;
@@ -80,6 +81,7 @@ export class Gate {
 
   /** What `check` would do, without asking anyone or writing audit rows. */
   preview(db: DatabaseConfig, user: ProxyUser, analysis: Analysis): 'allow' | 'ask' | 'deny' {
+    if (safetyError(analysis)) return 'deny';
     if (operationsOf(analysis).length === 0) return 'allow';
     const policy = evaluateAnalysis(this.store.listRules({ databaseId: db.id }), db, user.id, analysis);
     if (policy.action !== 'approve') return policy.action;
@@ -94,11 +96,18 @@ export class Gate {
     const tables = tablesOf(accesses);
     const verbs = verbsOf(accesses);
 
-    if (operations.length === 0) {
-      return { allowed: true, decision: 'allowed', approvalId: null, finish: () => {} };
-    }
-
+    const stillAuthorized = () => {
+      const currentDb = this.store.getDatabase(db.id), currentUser = this.store.getUser(user.id);
+      const access = currentUser?.access.find((a) => a.databaseId === db.id);
+      return !!(currentDb?.enabled && currentUser?.enabled && (req.surface === 'mcp' ? access?.allowMcp : access?.allowWire));
+    };
+    const refused = (message: string, code = '42501'): GateOutcome => ({
+      allowed: false, decision: 'denied', approvalId: null, sqlstate: code, message: `twophase: ${message}`,
+    });
+    if (!stillAuthorized()) return refused('Access to this database has been revoked');
+    const unsafe = safetyError(analysis);
     const audit = (decision: AuditDecision, extra: { ruleId?: string | null; approvalId?: string | null } & ExecResult & { durationMs?: number | null }) => {
+      if (!this.store.getDatabase(db.id) || !this.store.getUser(user.id)) return;
       const entry = this.store.addAudit({
         databaseId: db.id,
         userId: user.id,
@@ -117,6 +126,13 @@ export class Gate {
       });
       this.events.emit('audit', entry);
     };
+    if (unsafe) {
+      audit('denied', { sqlstate: '0A000' });
+      return refused(unsafe, '0A000');
+    }
+    if (operations.length === 0) {
+      return { allowed: true, decision: 'allowed', approvalId: null, finish: () => {} };
+    }
     const allowed = (decision: 'allowed' | 'granted' | 'approved', approvalId: string | null, ruleId: string | null): GateOutcome => {
       const started = Date.now();
       let done = false;
@@ -178,7 +194,13 @@ export class Gate {
       { db, user, signal: req.signal, onCreated: req.onWaiting },
     );
 
-    if (approval.status === 'approved') return allowed('approved', approval.id, null);
+    if (approval.status === 'approved') {
+      if (!stillAuthorized()) return refused('Access to this database has been revoked');
+      const latestDb = this.store.getDatabase(db.id)!;
+      const latest = evaluateAnalysis(this.store.listRules({ databaseId: db.id }), latestDb, user.id, analysis);
+      if (latest.action === 'deny') return refused('Policy changed while waiting for approval');
+      return allowed('approved', approval.id, null);
+    }
     const status = approval.status as 'denied' | 'expired' | 'cancelled';
     const decision = status === 'denied' ? 'rejected' : status;
     const sqlstate = status === 'denied' ? '42501' : '57014';

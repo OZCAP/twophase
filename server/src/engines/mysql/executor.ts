@@ -2,10 +2,9 @@ import mysql from 'mysql2';
 import type { DatabaseConfig } from '../../store.js';
 import { capResultSize, jsonCell, uniqueNames } from '../results.js';
 import { QueryError, type Analysis, type Estimate, type Executor, type StatementAnalysis, type StatementResult, type TableInfo } from '../types.js';
-import { analyzeMysql } from './analyze.js';
+import { analyzeMysql, type MysqlAnalyzeContext } from './analyze.js';
 import type { RoutineCatalog } from './functions.js';
-
-const CATALOG_TTL_MS = 5 * 60_000;
+import { allStatements, mysqlBatchError, opaqueRelationError, referencedTables, safetyError } from '../safety.js';
 
 /** mysql2 column type codes → names. */
 const TYPE_NAMES: Record<number, string> = {
@@ -44,14 +43,14 @@ function query<T = any>(conn: Conn | mysql.Pool, sql: string, values?: unknown[]
 
 /**
  * MySQL / MariaDB executor (mysql2). Reads run in `START TRANSACTION READ ONLY`, so the server
- * refuses table writes the classifier might have missed; approved writes run in one transaction
- * (DDL commits implicitly, as MySQL always does).
+ * refuses table writes the classifier might have missed. Approved DML uses a transaction;
+ * implicit-commit statements are accepted only on their own, and non-InnoDB writes are refused.
  */
 export class MysqlExecutor implements Executor {
   readonly placeholder = '?';
   private pool: mysql.Pool | null = null;
   private resolvedSsl: Promise<mysql.SslOptions | undefined> | null = null;
-  private server: { at: number; value: Promise<ServerContext> } | null = null;
+  private mariadb: boolean | undefined;
 
   constructor(readonly db: DatabaseConfig) {}
 
@@ -116,12 +115,12 @@ export class MysqlExecutor implements Executor {
     }
   }
 
-  /** Stored functions, loadable UDFs and sql_mode, cached for 5 minutes (reset after DDL). */
+  /** Refresh routine metadata for each analysis, including changes outside this proxy. */
   private serverContext(): Promise<ServerContext> {
-    if (this.server && Date.now() - this.server.at < CATALOG_TTL_MS) return this.server.value;
     const value = this.withConn(async (c) => {
       const [mode] = await query<{ mode: string; version: string }[]>(c, 'SELECT @@SESSION.sql_mode AS mode, VERSION() AS version');
       const modes = String(mode.mode).toUpperCase().split(',');
+      this.mariadb = /mariadb/i.test(mode.version);
       let catalog: RoutineCatalog | null = null;
       try {
         const routines = await query<{ s: string; n: string }[]>(
@@ -145,22 +144,31 @@ export class MysqlExecutor implements Executor {
       }
       return { catalog, ansiQuotes: modes.includes('ANSI_QUOTES'), noBackslashEscapes: modes.includes('NO_BACKSLASH_ESCAPES'), mariadb: /mariadb/i.test(mode.version) };
     }).catch((): ServerContext => ({ catalog: null, ansiQuotes: false, noBackslashEscapes: false, mariadb: this.db.engine === 'mariadb' }));
-    this.server = { at: Date.now(), value };
     return value;
   }
 
-  /** Stored-function / UDF catalog for classifying wire sessions (which track their own sql_mode). */
-  async catalog(): Promise<RoutineCatalog | null> {
-    return (await this.serverContext()).catalog;
-  }
-
-  invalidateCatalog() {
-    this.server = null;
-  }
-
-  async analyze(sql: string): Promise<Analysis> {
+  async analyze(sql: string, session: Partial<MysqlAnalyzeContext> = {}): Promise<Analysis> {
     const ctx = await this.serverContext();
-    return analyzeMysql(sql, { database: this.db.database, databaseAliases: [this.db.slug], ...ctx });
+    const analysis = analyzeMysql(sql, { database: this.db.database, databaseAliases: [this.db.slug], ...ctx, ...session });
+    if (!ctx.catalog) return { ...analysis, safetyError: 'Cannot verify the database routine catalog' };
+    return this.validate(analysis);
+  }
+
+  async validate(analysis: Analysis): Promise<Analysis> {
+    let error = safetyError(analysis) ?? mysqlBatchError(analysis.statements);
+    if (!error && referencedTables(analysis).length) {
+      try {
+        const rows = await this.withConn((c) => query<{ schema: string; name: string; type: string; engine: string | null }[]>(c,
+          'SELECT LOWER(TABLE_SCHEMA) AS `schema`, LOWER(TABLE_NAME) AS name, TABLE_TYPE AS type, ENGINE AS engine FROM information_schema.TABLES'));
+        const aliases = rows.filter((r) => r.type === 'VIEW').flatMap((r) => r.schema === this.db.database.toLowerCase() ? [r, { ...r, schema: this.db.slug.toLowerCase() }] : [r]);
+        error = opaqueRelationError(analysis, aliases);
+        const writes = allStatements(analysis.statements).flatMap((s) => s.accesses.filter((a) => a.op === 'write' && a.verb !== 'lock').map((a) => a.table));
+        const unsafe = rows.find((r) => r.type === 'BASE TABLE' && r.engine?.toLowerCase() !== 'innodb' &&
+          writes.some((t) => t === `${r.schema}.${r.name}` || r.schema === this.db.database.toLowerCase() && t === r.name));
+        if (unsafe) error ??= `Writes to nontransactional tables are not supported (${unsafe.name}, engine ${unsafe.engine})`;
+      } catch { error = 'Cannot verify database relation metadata'; }
+    }
+    return error ? { ...analysis, safetyError: error } : analysis;
   }
 
   tableName(t: TableInfo): string {
@@ -170,7 +178,7 @@ export class MysqlExecutor implements Executor {
 
   /** Session statement timeout. MySQL's max_execution_time only covers SELECT; a watchdog KILL covers the rest. */
   private async limitTime(c: Conn, ms: number) {
-    const { mariadb } = await this.serverContext();
+    const mariadb = this.mariadb ?? this.db.engine === 'mariadb';
     await query(c, mariadb ? `SET SESSION max_statement_time = ${ms / 1000}` : `SET SESSION max_execution_time = ${ms}`);
   }
 
@@ -182,6 +190,8 @@ export class MysqlExecutor implements Executor {
   }
 
   async run(statements: StatementAnalysis[], opts: { readOnly: boolean; params?: unknown[]; maxRows: number }): Promise<StatementResult[]> {
+    const checked = await this.validate({ statements, error: null });
+    if (checked.safetyError) throw new QueryError(checked.safetyError, '0A000');
     const timeout = Math.max(1, Math.round(this.db.statementTimeoutMs));
     // Anything but a plain read may leave session state behind (temporary tables, locks): don't reuse that connection.
     const discard = statements.some((s) => s.kind !== 'read' && s.kind !== 'session');
@@ -198,7 +208,6 @@ export class MysqlExecutor implements Executor {
       await query(c, opts.readOnly ? 'ROLLBACK' : 'COMMIT');
       return out;
     }, discard);
-    if (statements.some((s) => s.kind === 'ddl')) this.invalidateCatalog();
     return capResultSize(results);
   }
 
@@ -278,7 +287,9 @@ export class MysqlExecutor implements Executor {
   }
 
   async explain(text: string): Promise<string> {
-    const { mariadb } = await this.serverContext();
+    const checked = await this.analyze(`EXPLAIN ${text}`);
+    if (checked.safetyError) throw new QueryError(checked.safetyError, '0A000');
+    const mariadb = this.mariadb ?? this.db.engine === 'mariadb';
     return this.withConn(async (c) => {
       await this.limitTime(c, this.db.statementTimeoutMs);
       await query(c, 'START TRANSACTION READ ONLY');

@@ -2,6 +2,7 @@ import { randomBytes, randomInt } from 'node:crypto';
 import net from 'node:net';
 import type { Gate } from '../../../gate.js';
 import { canOnlyRead } from '../../../policy.js';
+import type { EventBus } from '../../../events.js';
 import type { Store } from '../../../store.js';
 import type { ExecutorRegistry } from '../../index.js';
 import { NATIVE, nonce as makeNonce, SHA2, verifyScramble } from './auth.js';
@@ -13,6 +14,7 @@ export interface MysqlWireDeps {
   store: Store;
   gate: Gate;
   executors: ExecutorRegistry;
+  events: EventBus;
 }
 
 const HANDSHAKE_TIMEOUT_MS = 30_000;
@@ -108,6 +110,14 @@ function greeting(connectionId: number, challenge: Buffer, plugin: string): Buff
 export function startMysqlWireListener(deps: MysqlWireDeps, opts: { host: string; port: number }) {
   const sessions = new Map<number, MysqlWireSession>();
   const byUpstreamThread = new Map<number, MysqlWireSession>();
+  const unsubscribe = deps.events.on('access.changed', ({ userId, databaseId }) => {
+    for (const session of sessions.values()) {
+      if (session.user.id === userId || session.db.id === databaseId) {
+        void session.cancel().catch(() => {});
+        session.close();
+      }
+    }
+  });
   const server = net.createServer((socket) => void handle(socket));
 
   async function killUpstream(target: MysqlWireSession) {
@@ -286,6 +296,7 @@ export function startMysqlWireListener(deps: MysqlWireDeps, opts: { host: string
       });
     },
     async close() {
+      unsubscribe();
       for (const s of sessions.values()) s.close();
       await new Promise<void>((r) => server.close(() => r()));
     },

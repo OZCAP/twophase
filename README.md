@@ -25,13 +25,12 @@ runs. Each statement is classified, together with the tables it touches:
 | Operation | Includes | Default |
 | --- | --- | --- |
 | **read** | SELECT, SHOW, plain EXPLAIN, COPY TO | Allow |
-| **write** | INSERT / UPDATE / DELETE / MERGE, TRUNCATE, COPY FROM, `SELECT … FOR UPDATE`, DML inside CTEs, side-effecting functions (`nextval`, volatile user functions, …) | Ask |
-| **ddl** | CREATE / ALTER / DROP of tables, indexes, views, functions, …; `SELECT INTO`, `CREATE TABLE AS` | Ask |
+| **write** | INSERT / UPDATE / DELETE / MERGE, TRUNCATE, COPY FROM, `SELECT … FOR UPDATE`, DML inside CTEs, known core side-effecting functions (`nextval`, …) | Ask |
+| **ddl** | CREATE / ALTER / DROP of tables and indexes; `SELECT INTO`, `CREATE TABLE AS` | Ask |
 | **admin** | GRANT, roles, VACUUM, `DO` blocks, server files / `COPY … PROGRAM`, `SET ROLE` and other privileged settings, `pg_terminate_backend`, `dblink`, **and anything unrecognised or unparseable** | Deny |
 
 On MySQL / MariaDB the same operations cover: `REPLACE` (an insert and a delete),
-`INSERT … ON DUPLICATE KEY UPDATE` (an insert and an update), `LOCK TABLES`, `CALL`, and **any
-stored function** (MySQL doesn't enforce `READS SQL DATA`, so it proves nothing) as writes;
+`INSERT … ON DUPLICATE KEY UPDATE` (an insert and an update) and `LOCK TABLES` as writes;
 `LOAD DATA`, `SELECT … INTO OUTFILE`, `LOAD_FILE()`, `SET GLOBAL`, `sql_mode`, `foreign_key_checks`,
 users and grants, `KILL`, `USE` of another database, unsafe character sets (GBK, SJIS, Big5, …)
 and stored programs with multi-statement bodies as admin. MySQL table names are matched
@@ -39,13 +38,23 @@ case-insensitively, and `shop.orders` is the same as `orders` when `shop` is the
 
 Some things that commonly slip past "read-only" checks are handled explicitly:
 - `EXPLAIN ANALYZE` counts as whatever it runs.
-- Function calls count as writes when the database catalog marks them volatile. Postgres itself
-  forbids data changes in STABLE and IMMUTABLE SQL / PL/pgSQL functions.
+- **Stored routines, unknown functions, views and foreign tables are refused on both MCP and
+  wire connections.** Their indirect effects cannot be checked against table policies. This
+  includes routines declared STABLE/IMMUTABLE or READS SQL DATA: those declarations do not
+  prove the absence of nested writes. Rules and trust windows cannot override this restriction.
+- PostgreSQL core built-ins are checked against a fresh catalog. A user function sharing a
+  built-in's name is never trusted by name alone. Explicitly qualifying a core built-in with
+  `pg_catalog` avoids ambiguity when another schema defines a same-named function.
 - `EXECUTE` of a prepared statement is judged by what was prepared.
 - `BEGIN READ WRITE` / `SET TRANSACTION READ WRITE` count as admin.
 
 Transaction control and harmless session settings (`BEGIN`, `COMMIT`, `SET search_path`, …)
 always pass.
+
+Creating or altering views, stored routines, triggers, rules, policies, custom types, casts or
+operators through the proxy is also refused. Manage these objects directly through your
+database administration workflow. Relation metadata is refreshed for each query and prepared
+execution; metadata lookup failures deny the query.
 
 **Rules** per database match an operation or one specific kind of statement, an optional table
 name or glob (`orders`, `audit_*`, `app.*`) and optionally one client, with the action
@@ -102,7 +111,11 @@ the asked part; the request is released early only while every part is covered.
 How `query` runs statements:
 - **Reads** run inside `BEGIN READ ONLY … ROLLBACK` (MySQL: `START TRANSACTION READ ONLY`), so the
   database refuses any table write the classifier missed.
-- **Approved writes** run in one `BEGIN … COMMIT`, so a multi-statement call is atomic.
+- **Approved DML batches** run in one `BEGIN … COMMIT`; an execution error rolls them back.
+  MySQL/MariaDB batches containing DDL, TRUNCATE or admin statements are rejected before
+  any statement runs because these operations can commit implicitly. Submit them separately.
+  MySQL/MariaDB writes to non-InnoDB tables are refused because rollback is not assured.
+  PostgreSQL commands requiring autocommit must likewise be submitted on their own.
 - **Not available:** transaction control, session-wide `SET` (Postgres: use `SET LOCAL`), `PREPARE`,
   `COPY`, `USE`, `LOCK TABLES`.
 - Parameters are `$1, $2, …` for Postgres and `?` for MySQL / MariaDB.
@@ -131,6 +144,16 @@ The proxy fails the statement on the real server too, so transaction state stays
 **Read-only clients.** If a client's rules mean it can never write, its sessions run with
 `default_transaction_read_only=on`. If the database has one configured, they also use the
 **read-only login**, so Postgres enforces it.
+
+**Timeouts.** Every upstream wire connection starts with the configured statement timeout.
+Client startup options and subsequent SET statements can reduce it, but cannot raise it or
+disable it. The same upper limit applies to MCP SET LOCAL statements.
+
+**Revocation.** Disabling/deleting a client, removing its access, rotating its token or changing
+its database configuration closes affected wire sessions, aborts pending requests and requests
+cancellation of running queries. Reconnect with the current credentials and permissions.
+Access and deny rules are checked again when a waiting approval resolves. Already committed
+statements cannot be undone by revoking access.
 
 **Rejected:**
 - startup settings that change privileges or how SQL is parsed (`standard_conforming_strings`,
@@ -330,9 +353,11 @@ mode and an optional read-only login.
 
 - **Database passwords** are stored in plaintext in SQLite. The proxy keeps
   `DATA_DIR` private to its own user (directory 0700, files 0600); protect copies you take elsewhere.
-- **Classification has limits.** It's conservative, but views and functions can hide behaviour:
-  a view calling a volatile function reads as a read. The MCP read path is still enforced by
-  `READ ONLY`. On the wire path, use least-privilege roles and the read-only login.
+- **Classification has limits.** Views, foreign tables and stored routines are blocked rather
+  than trusted. Database-side triggers/default expressions, row-security policies, custom operators/types and
+  extensions can still affect ordinary table operations. Review those objects and use
+  least-privilege database roles; table rules are not a replacement for database permissions.
+  The MCP read path also uses READ ONLY, and read-only wire clients should use a read-only login.
 - **Not supported yet on the wire:**
   - client-side TLS, SCRAM channel binding and GSSAPI;
   - connection pooling;

@@ -35,13 +35,13 @@ describe.skipIf(!available)('hosted MCP against real Postgres', () => {
     expect(r.statements[1].rows).toEqual([{ transaction_read_only: 'on' }]);
   });
 
-  it('uses the catalog: STABLE functions are reads, VOLATILE ones need approval', async () => {
-    expect(jsonOf(await query('SELECT order_total(1) AS t')).statements[0].rows[0].t).toBe('6000');
-    const call = query('SELECT bump_order(1)');
-    const pending = await proxy.nextPending();
-    expect(pending.operations).toEqual(['write']);
-    await proxy.admin('POST', `/approvals/${pending.id}/decision`, { decision: 'deny' });
-    expect((await call).isError).toBe(true);
+  it('refuses stored functions regardless of their declared volatility', async () => {
+    for (const sql of ['SELECT order_total(1) AS t', 'SELECT bump_order(1)']) {
+      const result = await query(sql);
+      expect(result.isError).toBe(true);
+      expect(textOf(result)).toMatch(/indirect effects/);
+    }
+    expect(await proxy.admin('GET', '/approvals?status=pending')).toEqual([]);
   });
 
   it('holds a write until approved, then commits it — with a planner estimate on the card', async () => {

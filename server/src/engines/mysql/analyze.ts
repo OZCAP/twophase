@@ -366,7 +366,11 @@ class Stmt {
       if (opts.functions !== false && this.isFunctionName(i) && !this.consumed.has(i)) {
         const parts = isPunct(prev, '.') && this.t[i - 2] && this.t[i - 2].type !== 'punct' ? [this.t[i - 2].value, tok.value] : [tok.value];
         const verdict = classifyFunction(parts, this.ctx.catalog ?? null);
-        if (verdict) accesses.push(verdict);
+        if (verdict) {
+          const { opaque, ...access } = verdict;
+          accesses.push(access);
+          if (opaque) this.flags.add('opaque_function');
+        }
       }
     }
     return accesses;
@@ -871,7 +875,7 @@ function asPlan(inner: Partial): Partial {
   const accesses = dedupe(
     inner.accesses.map((a): Access => (a.op === 'write' && a.verb !== 'function' && a.verb !== 'call' ? { op: 'read', verb: 'select', table: a.table } : a)),
   );
-  return { command: `EXPLAIN ${inner.command}`, kind: accesses.length ? kindOf(accesses) : 'read', accesses: accesses.length ? accesses : [{ op: 'read', verb: 'select', table: null }], flags: [] };
+  return { command: `EXPLAIN ${inner.command}`, kind: accesses.length ? kindOf(accesses) : 'read', accesses: accesses.length ? accesses : [{ op: 'read', verb: 'select', table: null }], flags: inner.flags.filter((f) => f === 'opaque_function') };
 }
 
 const EXPLAINABLE = new Set(['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'REPLACE', 'TABLE', 'WITH', 'VALUES']);

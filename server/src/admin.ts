@@ -200,10 +200,12 @@ export function adminRouter(deps: AdminDeps) {
     const patch = parse(databasePatch, req.body);
     if (patch.slug && patch.slug !== current.slug && store.getDatabaseBySlug(patch.slug)) throw new HttpError(409, 'Slug already in use');
     res.json(publicDatabase(store.updateDatabase(current.id, patch)!));
+    events.emit('access.changed', { databaseId: current.id });
   });
 
   r.delete('/databases/:id', async (req, res) => {
     mustDatabase(req.params.id);
+    events.emit('access.changed', { databaseId: req.params.id });
     await executors.drop(req.params.id);
     store.deleteDatabase(req.params.id);
     res.status(204).end();
@@ -263,17 +265,20 @@ export function adminRouter(deps: AdminDeps) {
     const patch = parse(userPatch, req.body);
     if (patch.access) checkAccess(patch.access);
     res.json(store.updateUser(req.params.id, patch));
+    events.emit('access.changed', { userId: req.params.id });
   });
 
   r.post('/users/:id/rotate-token', (req, res) => {
     mustUser(req.params.id);
     const { token, stored } = issueClientToken();
     store.setUserToken(req.params.id, stored);
+    events.emit('access.changed', { userId: req.params.id });
     res.json({ user: store.getUser(req.params.id), token });
   });
 
   r.delete('/users/:id', (req, res) => {
     mustUser(req.params.id);
+    events.emit('access.changed', { userId: req.params.id });
     store.deleteUser(req.params.id);
     res.status(204).end();
   });

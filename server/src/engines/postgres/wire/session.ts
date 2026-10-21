@@ -3,7 +3,6 @@ import type net from 'node:net';
 import type { Gate, GateOutcome } from '../../../gate.js';
 import type { Approval, DatabaseConfig, ProxyUser } from '../../../store.js';
 import type { Analysis, StatementAnalysis } from '../../types.js';
-import { analyze } from '../analyze.js';
 import type { PostgresExecutor } from '../executor.js';
 import { errorResponse, flush, FrameReader, noticeResponse, parse as parseMessage, parseFields, query as queryMessage, Reader, type Frame } from './protocol.js';
 
@@ -73,8 +72,8 @@ export class WireSession {
   constructor(
     private client: net.Socket,
     private upstream: net.Socket,
-    private db: DatabaseConfig,
-    private user: ProxyUser,
+    readonly db: DatabaseConfig,
+    readonly user: ProxyUser,
     private applicationName: string | null,
     private deps: SessionDeps,
     leftovers: { client: Buffer; upstream: Buffer },
@@ -185,7 +184,8 @@ export class WireSession {
           const outcome = await this.check(sql, null, analysis, true);
           if (!outcome.allowed) return this.inject(outcome, 'extended');
         }
-        this.prepared.set(name, { sql, analysis });
+        // A duplicate named Parse fails upstream and leaves the old statement in place.
+        if (!name || !this.prepared.has(name)) this.prepared.set(name, { sql, analysis });
         return this.send(f.raw);
       }
       case 'B': {
@@ -208,7 +208,8 @@ export class WireSession {
           this.track('execute', untracked); // a row-limited re-fetch of an already-allowed portal
           return this.send(f.raw);
         }
-        const outcome = await this.check(stmt.sql, portal.params, stmt.analysis, true);
+        const analysis = await this.analyze(stmt.sql);
+        const outcome = await this.check(stmt.sql, portal.params, analysis, true);
         if (!outcome.allowed) return this.inject(outcome, 'extended');
         portal.allowed = true;
         this.track('execute', outcome);
@@ -243,18 +244,18 @@ export class WireSession {
   }
 
   private async analyze(sql: string): Promise<Analysis> {
-    const catalog = await this.deps.executor.functionCatalog();
     const prepared = new Map<string, StatementAnalysis>();
     for (const [name, p] of this.prepared) if (p.analysis.statements.length === 1) prepared.set(name, p.analysis.statements[0]);
     for (const [name, a] of this.sqlPrepared) prepared.set(name, a);
-    return analyze(sql, { catalog, prepared });
+    return this.deps.executor.analyze(sql, { prepared });
   }
 
   /** SQL-level PREPARE / DEALLOCATE (distinct from protocol-level Parse). */
   private sqlPrepared = new Map<string, StatementAnalysis>();
   private trackSessionEffects(analysis: Analysis) {
     for (const s of analysis.statements) {
-      if (s.prepared) this.sqlPrepared.set(s.prepared.name, s.prepared.analysis);
+      // SQL PREPARE also keeps the original statement when a duplicate name is rejected.
+      if (s.prepared && !this.sqlPrepared.has(s.prepared.name)) this.sqlPrepared.set(s.prepared.name, s.prepared.analysis);
       if (s.command === 'DEALLOCATE' || s.flags.includes('session_reset')) {
         const m = /DEALLOCATE\s+(?:PREPARE\s+)?("?)([^";\s]+)\1/i.exec(s.text);
         if (m && m[2].toUpperCase() !== 'ALL') this.sqlPrepared.delete(m[2]);

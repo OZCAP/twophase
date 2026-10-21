@@ -274,9 +274,10 @@ describe('statements and splitting', () => {
     expect(one('SET STATEMENT sql_mode = "" FOR SELECT 1').kind).toBe('admin');
   });
 
-  it('without a catalog, unknown functions ask', () => {
+  it('unknown functions remain opaque with or without a catalog', () => {
     expect(one('SELECT mystery(1)', { database: 'shop' }).kind).toBe('write');
-    expect(one('SELECT mystery(1)', base).kind).toBe('session');
+    expect(one('SELECT mystery(1)', base).kind).toBe('write');
+    expect(one('SELECT mystery(1)', base).flags).toContain('opaque_function');
     expect(one('SELECT lower(x) FROM t', { database: 'shop' }).kind).toBe('read');
   });
 

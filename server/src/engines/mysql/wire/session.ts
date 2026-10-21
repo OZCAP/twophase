@@ -2,7 +2,6 @@ import type net from 'node:net';
 import type { Gate, GateOutcome } from '../../../gate.js';
 import type { DatabaseConfig, ProxyUser } from '../../../store.js';
 import type { Analysis, StatementAnalysis } from '../../types.js';
-import { analyzeMysql } from '../analyze.js';
 import type { MysqlExecutor } from '../executor.js';
 import { CAP, COM, errPacket, isEof, okPacket, packet, PacketReader, parseEofStatus, parseErr, parseOk, Reader, STATUS, textEncoding, type Message } from './protocol.js';
 
@@ -352,10 +351,9 @@ export class MysqlWireSession {
   }
 
   private async analyze(sql: string): Promise<Analysis> {
-    return analyzeMysql(sql, {
+    return this.deps.executor.analyze(sql, {
       database: this.db.database,
       databaseAliases: [this.db.slug],
-      catalog: await this.deps.executor.catalog(),
       prepared: this.sqlPrepared,
       ansiQuotes: this.ansiQuotes,
       noBackslashEscapes: this.noBackslashEscapes,
@@ -383,7 +381,6 @@ export class MysqlWireSession {
     this.trackSessionEffects(analysis);
     const t = await this.forwardTracked(raw, 'results', outcome);
     // New or dropped stored functions change how later statements classify.
-    if (analysis.statements.some((s) => s.kind === 'ddl') && !t.error) this.deps.executor.invalidateCatalog();
     if (analysis.statements.some((s) => s.kind === 'admin' && /sql_mode/i.test(s.text))) await this.refreshSqlMode();
   }
 
@@ -415,7 +412,7 @@ export class MysqlWireSession {
     const stmt = this.prepared.get(id);
     if (!stmt) return this.reply(m, ER.UNKNOWN_STMT_HANDLER, `Unknown prepared statement handler (${id}) given to mysqld_stmt_execute`);
     const params = decodeParams(m.payload, stmt);
-    const outcome = await this.check(stmt.sql, params, stmt.analysis);
+    const outcome = await this.check(stmt.sql, params, await this.analyze(stmt.sql));
     if (!outcome.allowed) return this.deny(m, outcome);
     return this.forwardTracked(m.raw, 'results', outcome);
   }

@@ -38,8 +38,8 @@ async function rawConnect(port: number, user: string, password: string, database
   const i16 = (n: number) => Buffer.from([n >> 8, n & 255]);
   return {
     socket,
-    parse: (sql: string) => message('P', cstr(''), cstr(sql), i16(0)),
-    bind: () => message('B', cstr(''), cstr(''), i16(0), i16(0), i16(0)),
+    parse: (sql: string, name = '') => message('P', cstr(name), cstr(sql), i16(0)),
+    bind: (statement = '') => message('B', cstr(''), cstr(statement), i16(0), i16(0), i16(0)),
     execute: () => message('E', cstr(''), Buffer.from([0, 0, 0, 0])),
     sync: () => message('S'),
     /** Collect messages until ReadyForQuery; returns [types, errors, txStatus]. */
@@ -253,6 +253,31 @@ describe.skipIf(!available)('Postgres wire listener against real Postgres', () =
       await expect(exec).rejects.toMatchObject({ code: '42501' });
       expect(await tdb.sql('SELECT count(*)::int AS n FROM orders')).toEqual([{ n: 50 }]);
       await c.end();
+    });
+
+    it('does not replace the analysis when SQL PREPARE fails on a duplicate name', async () => {
+      const c = await connect();
+      await c.query('PREPARE keep_original AS DELETE FROM orders');
+      await expect(c.query('PREPARE keep_original AS SELECT 1')).rejects.toMatchObject({ code: '42P05' });
+      const run = c.query('EXECUTE keep_original');
+      expect((await decideNext('deny')).verbs).toEqual(['delete']);
+      await expect(run).rejects.toMatchObject({ code: '42501' });
+      expect(await tdb.sql('SELECT count(*)::int AS n FROM orders')).toEqual([{ n: 50 }]);
+      await c.end();
+    });
+
+    it('does not replace the analysis when a named protocol Parse fails', async () => {
+      const raw = await rawConnect(proxy.wirePort, client.user.username, client.token, 'shop');
+      try {
+        raw.socket.write(Buffer.concat([raw.parse('DELETE FROM orders', 'keep_original'), raw.sync()]));
+        expect((await raw.untilReady()).errors).toEqual([]);
+        raw.socket.write(Buffer.concat([raw.parse('SELECT 1', 'keep_original'), raw.sync()]));
+        expect((await raw.untilReady()).errors).toEqual([expect.stringMatching(/^42P05:/)]);
+        raw.socket.write(Buffer.concat([raw.bind('keep_original'), raw.execute(), raw.sync()]));
+        expect((await decideNext('deny')).verbs).toEqual(['delete']);
+        expect((await raw.untilReady()).errors).toEqual([expect.stringMatching(/^42501:/)]);
+        expect(await tdb.sql('SELECT count(*)::int AS n FROM orders')).toEqual([{ n: 50 }]);
+      } finally { raw.socket.destroy(); }
     });
 
     it('rejects legacy fast-path function calls', async () => {

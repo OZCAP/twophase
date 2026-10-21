@@ -3,8 +3,8 @@ import type { Access } from '../types.js';
 /**
  * Functions are how a MySQL "SELECT" can have side effects. Classification, in order:
  *   1. loadable UDFs (from the catalog) and server-file/shell functions → admin
- *   2. stored functions (from the catalog, or any schema-qualified call) → write. MySQL does not
- *      enforce READS SQL DATA / NO SQL, so a stored function's declared characteristics prove nothing.
+ *   2. stored functions and unknown/schema-qualified calls → opaque. MySQL does not enforce
+ *      READS SQL DATA / NO SQL, so a stored function's declared characteristics prove nothing.
  *   3. a short list of side-effecting built-ins (named locks, sequences) → write
  *   4. otherwise a built-in → read. Without a catalog, only names on the built-in list count as
  *      built-ins; anything else asks.
@@ -70,15 +70,15 @@ export function isBuiltin(name: string): boolean {
 /**
  * What a call to `parts.join('.')` does; null for a plain read. `parts` is [name] or [db, name].
  */
-export function classifyFunction(parts: string[], catalog: RoutineCatalog | null): Access | null {
+export function classifyFunction(parts: string[], catalog: RoutineCatalog | null): (Access & { opaque?: boolean }) | null {
   const name = parts[parts.length - 1].toLowerCase();
   const qualified = parts.length > 1 ? `${parts[0].toLowerCase()}.${name}` : null;
-  if (parts.length === 1 && catalog?.udfs.has(name)) return { op: 'admin', verb: 'admin', table: null };
+  if (parts.length === 1 && catalog?.udfs.has(name)) return { op: 'admin', verb: 'admin', table: null, opaque: true };
   if (parts.length === 1 && ADMIN.has(name)) return { op: 'admin', verb: 'admin', table: null };
-  if (qualified) return { op: 'write', verb: 'function', table: null };
-  if (catalog?.functions.has(name)) return { op: 'write', verb: 'function', table: null };
+  if (qualified) return { op: 'write', verb: 'function', table: null, opaque: true };
+  if (catalog?.functions.has(name)) return { op: 'write', verb: 'function', table: null, opaque: true };
   if (WRITE.has(name)) return { op: 'write', verb: 'function', table: null };
   if (BUILTINS.has(name)) return null;
-  // Not a known built-in: with a catalog that means it isn't a stored function either (or doesn't exist).
-  return catalog ? null : { op: 'write', verb: 'function', table: null };
+  // Unknown metadata must never turn a function into a harmless session statement.
+  return { op: 'write', verb: 'function', table: null, opaque: true };
 }

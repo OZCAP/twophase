@@ -149,10 +149,8 @@ describe.each(flavours)('MySQL wire listener against real %s', (flavour) => {
         await c.query('DEALLOCATE PREPARE del');
       });
 
-      it('stored functions ask, admin statements are refused, USE is limited to this database', async () => {
-        const run = c.query('SELECT bump_order(6) AS x');
-        expect((await decide('deny')).verbs).toEqual(['function']);
-        await expect(run).rejects.toMatchObject({ errno: 1227 });
+      it('stored functions are refused, admin statements are refused, USE is limited to this database', async () => {
+        await expect(c.query('SELECT bump_order(6) AS x')).rejects.toMatchObject({ errno: 1227, message: expect.stringMatching(/indirect effects/) });
         await expect(c.query("SET SESSION sql_mode = 'ANSI_QUOTES'")).rejects.toMatchObject({ errno: 1227, message: /admin is not permitted/ });
         await expect(c.query("SELECT * FROM orders INTO OUTFILE '/tmp/x'")).rejects.toMatchObject({ errno: 1227 });
         await expect(c.query('USE mysql')).rejects.toMatchObject({ errno: 1227 });

@@ -44,11 +44,11 @@ export function createApp(config: Config, overrides: { whois?: Whois } = {}) {
 
   const mcp = mcpRouter({ store, gate, executors, config });
   const wire = config.wire.enabled
-    ? startWireListener({ store, gate, executors, approvalTimeoutSeconds: config.approvalTimeoutSeconds }, { host: config.wire.host, port: config.wire.port })
+    ? startWireListener({ store, gate, executors, events, approvalTimeoutSeconds: config.approvalTimeoutSeconds }, { host: config.wire.host, port: config.wire.port })
     : null;
 
   const mysqlWire = config.mysqlWire.enabled
-    ? startMysqlWireListener({ store, gate, executors }, { host: config.mysqlWire.host, port: config.mysqlWire.port })
+    ? startMysqlWireListener({ store, gate, executors, events }, { host: config.mysqlWire.host, port: config.mysqlWire.port })
     : null;
 
   const app = express();
