@@ -10,7 +10,7 @@ import { decideAccess } from './policy.js';
 import type { PushService } from './push/index.js';
 import { ENGINES } from './db/schema.js';
 import type { DatabaseConfig, DatabaseInput, Store } from './store.js';
-import { isAllowed, tailnetCallerIp, type TailscaleIdentity, type Whois } from './tailscaleAuth.js';
+import { tailnetCallerIp, type TailscaleIdentity, type Whois } from './tailscaleAuth.js';
 
 export interface AdminDeps {
   store: Store;
@@ -22,7 +22,7 @@ export interface AdminDeps {
   adminAuth: AdminAuth;
 }
 
-export type AdminAuth = { mode: 'token'; tokenHash: string } | { mode: 'tailscale'; allow: string[]; whois: Whois };
+export type AdminAuth = { mode: 'token'; tokenHash: string } | { mode: 'tailscale'; whois: Whois };
 
 class HttpError extends Error {
   constructor(
@@ -139,7 +139,6 @@ export function adminRouter(deps: AdminDeps) {
     const ip = tailnetCallerIp(req);
     const identity = ip ? await auth.whois(ip).catch(() => null) : null;
     if (!identity) return res.status(401).json({ error: 'Open this through Tailscale to manage the proxy' });
-    if (!isAllowed(identity, auth.allow)) return res.status(403).json({ error: `Device "${identity.node}" is not allowed to manage the proxy` });
     res.locals.identity = identity;
     next();
   });

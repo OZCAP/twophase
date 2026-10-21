@@ -208,7 +208,7 @@ Open http://localhost:5173, sign in with the admin token, then:
 ### Docker Compose with Tailscale (recommended)
 
 ```sh
-cp .env.example .env   # set TS_AUTHKEY, TS_HOSTNAME and ADMIN_TAILSCALE_ALLOW
+cp .env.example .env   # set TS_AUTHKEY and TS_HOSTNAME
 docker compose up -d --build
 ```
 
@@ -220,8 +220,8 @@ serves (`deploy/tailscale-serve.json`):
 - `<TS_HOSTNAME>:3307`: MySQL / MariaDB clients.
 
 Nothing is published on the host. Sign-in is by Tailscale identity
-([below](#sign-in-with-tailscale-instead-of-an-admin-token)): only the devices in
-`ADMIN_TAILSCALE_ALLOW` can use the app.
+([below](#sign-in-with-tailscale-instead-of-an-admin-token)): every verified tailnet device
+that can reach HTTPS can manage the app. Control access with Tailscale grants/ACLs for port 443.
 
 - **Persistence.** The database lives in the `twophase-data` volume; the node's
   Tailscale identity lives in `tailscale-state`. Both containers use `restart: unless-stopped`,
@@ -261,19 +261,20 @@ each database's `sslmode`.
 ### Sign in with Tailscale instead of an admin token
 
 ```sh
-HOST=127.0.0.1 ADMIN_AUTH=tailscale ADMIN_TAILSCALE_ALLOW=tag:admin-client node dist/index.js
+HOST=127.0.0.1 ADMIN_AUTH=tailscale node dist/index.js
 ```
 
 For each admin request the proxy takes the caller's tailnet IP from `X-Forwarded-For`, which
-`tailscale serve` sets and overwrites. It asks the local `tailscaled` which device that is, and
-allows it only if it matches `ADMIN_TAILSCALE_ALLOW`. Entries are a tag (`tag:admin-client`), an
-owner login (`alice@github`) or a machine name, comma separated.
+`tailscale serve` sets and overwrites. It asks the local `tailscaled` which device that is.
+Any verified tailnet device that can reach the web/admin endpoint may manage the proxy and
+approve statements. Device identity is retained for status and approval attribution.
 
-- **Allow only the devices you approve from, never machines where agents run.** Otherwise an
-  agent could approve its own statements. Tagged devices work: identity headers aren't sent for
-  them, which is why the proxy uses whois instead.
-- The proxy refuses to start in this mode unless it's bound to loopback with a non-empty
-  allow-list. Processes on the proxy host itself are trusted.
+- **Tailscale grants/ACLs control admin access.** Grant HTTPS access only to devices you want
+  to administer the proxy. A device with HTTPS access can approve its own statements. The Docker
+  setup uses port 443; use your configured HTTPS port when running `tailscale serve` on the host.
+- Tagged and user-owned devices both work; no application device allow-list is needed.
+- The proxy refuses to start in this mode unless it's bound to loopback. Requests without a
+  verified Tailscale identity are rejected. Processes on the proxy host itself are trusted.
 - Switching to this mode deletes the stored admin token. Client tokens are unaffected.
 - In Docker, mount `/var/run/tailscale/tailscaled.sock` (or set `TAILSCALE_SOCKET`). The Tailscale
   compose file does this for you.
@@ -302,8 +303,7 @@ to the Home Screen** (Share → Add to Home Screen, open it from there, then Set
 | `MYSQL_WIRE_PUBLIC_PORT` | `MYSQL_WIRE_PORT` | Port shown in client snippets |
 | `DATA_DIR` | `./data` | SQLite database |
 | `ADMIN_TOKEN` | generated | If unset, generated on first boot and printed once (only its hash is stored). `RESET_ADMIN_TOKEN=1` rotates it |
-| `ADMIN_AUTH` | `token` | `tailscale` = no token, authenticate by tailnet device |
-| `ADMIN_TAILSCALE_ALLOW` | — | Required with `ADMIN_AUTH=tailscale`, e.g. `tag:admin-client` |
+| `ADMIN_AUTH` | `token` | `tailscale` = any verified tailnet device reaching the admin endpoint; access controlled by Tailscale grants/ACLs |
 | `TAILSCALE_SOCKET` | `/var/run/tailscale/tailscaled.sock` | tailscaled LocalAPI socket |
 | `APPROVAL_TIMEOUT_SECONDS` | `300` | A held statement fails after this long |
 | `AUDIT_RETENTION_DAYS` | `90` | Activity and decided approvals older than this are deleted (hourly); `0` keeps everything |

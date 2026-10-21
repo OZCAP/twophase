@@ -3,7 +3,7 @@
 #   <TS_HOSTNAME>:6432                        Postgres clients
 #   <TS_HOSTNAME>:3307                        MySQL / MariaDB clients
 #
-#   cp .env.example .env    # set TS_AUTHKEY and ADMIN_TAILSCALE_ALLOW
+#   cp .env.example .env    # set TS_AUTHKEY and TS_HOSTNAME
 #   docker compose up -d
 #
 # Both containers restart with Docker (restart: unless-stopped), so they come back after a reboot.
@@ -42,9 +42,9 @@ services:
       - tailscale
     environment:
       HOST: 127.0.0.1
-      # Only these tailnet devices may use the app and approve (tags, logins or machine names).
+      # Any verified tailnet device that can reach HTTPS may manage the app and approve.
+      # Control access with Tailscale grants/ACLs for port 443.
       ADMIN_AUTH: tailscale
-      ADMIN_TAILSCALE_ALLOW: ${ADMIN_TAILSCALE_ALLOW:?set ADMIN_TAILSCALE_ALLOW in .env, e.g. tag:admin-client}
       TAILSCALE_SOCKET: /var/run/tailscale/tailscaled.sock
       APPROVAL_TIMEOUT_SECONDS: ${APPROVAL_TIMEOUT_SECONDS:-300}
       VAPID_SUBJECT: ${VAPID_SUBJECT:-mailto:admin@example.com}

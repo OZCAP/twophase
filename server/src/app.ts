@@ -25,7 +25,6 @@ export function createApp(config: Config, overrides: { whois?: Whois } = {}) {
   if (config.adminAuth === 'tailscale') {
     // X-Forwarded-For is only trustworthy if nobody but `tailscale serve` (on loopback) can reach us.
     if (!LOOPBACK_HOSTS.has(config.host)) throw new Error('ADMIN_AUTH=tailscale requires HOST=127.0.0.1 (expose it with `tailscale serve`)');
-    if (config.tailscaleAllow.length === 0) throw new Error('ADMIN_AUTH=tailscale requires ADMIN_TAILSCALE_ALLOW, e.g. tag:admin-client');
   }
 
   const store = new Store(config.dataDir);
@@ -38,7 +37,7 @@ export function createApp(config: Config, overrides: { whois?: Whois } = {}) {
   let adminAuth: AdminAuth;
   if (config.adminAuth === 'tailscale') {
     forgetAdminToken(store);
-    adminAuth = { mode: 'tailscale', allow: config.tailscaleAllow, whois: overrides.whois ?? localApiWhois(config.tailscaleSocket) };
+    adminAuth = { mode: 'tailscale', whois: overrides.whois ?? localApiWhois(config.tailscaleSocket) };
   } else {
     adminAuth = { mode: 'token', tokenHash: resolveAdminTokenHash(store, { adminToken: config.adminToken, reset: config.resetAdminToken }) };
   }

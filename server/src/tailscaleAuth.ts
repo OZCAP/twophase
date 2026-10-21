@@ -58,16 +58,6 @@ export function localApiWhois(socketPath: string): Whois {
   };
 }
 
-/**
- * Allow-list entries: `tag:admin-client` (device tag), `alice@github` (owner login), or a
- * machine name like `example-laptop`.
- */
-export function isAllowed(identity: TailscaleIdentity, allow: string[]): boolean {
-  return allow.some((entry) =>
-    entry.startsWith('tag:') ? identity.tags.includes(entry) : entry.includes('@') ? identity.login === entry : identity.node === entry,
-  );
-}
-
 const LOOPBACK = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 
 /**

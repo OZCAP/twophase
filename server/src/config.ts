@@ -8,11 +8,9 @@ export interface Config {
   webDir: string;
   /**
    * `token`: admin API requires ADMIN_TOKEN (or the generated one).
-   * `tailscale`: no token; the caller's tailnet device (via `tailscale serve`) must match `tailscaleAllow`.
+   * `tailscale`: no token; any verified tailnet device reaching us via `tailscale serve` may manage the proxy.
    */
   adminAuth: 'token' | 'tailscale';
-  /** Devices allowed to administer in tailscale mode: `tag:…`, `user@provider`, or machine names. */
-  tailscaleAllow: string[];
   tailscaleSocket: string;
   /** Explicit admin token. When unset, one is generated on first boot and persisted (hashed). */
   adminToken?: string;
@@ -36,10 +34,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     dataDir: env.DATA_DIR ?? './data',
     webDir: env.WEB_DIR ?? fileURLToPath(new URL('../../web/dist', import.meta.url)),
     adminAuth: env.ADMIN_AUTH === 'tailscale' ? 'tailscale' : 'token',
-    tailscaleAllow: (env.ADMIN_TAILSCALE_ALLOW ?? '')
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean),
     tailscaleSocket: env.TAILSCALE_SOCKET ?? '/var/run/tailscale/tailscaled.sock',
     adminToken: env.ADMIN_TOKEN || undefined,
     resetAdminToken: env.RESET_ADMIN_TOKEN === '1',

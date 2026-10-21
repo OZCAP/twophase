@@ -59,7 +59,7 @@ export function App() {
           <div className="card">
             <h1>Not allowed</h1>
             <p>{gate.message}.</p>
-            <p className="muted small">Ask the proxy's operator to add this device to ADMIN_TAILSCALE_ALLOW.</p>
+            <p className="muted small">Connect through Tailscale and check that its access rules allow this device to reach the proxy.</p>
           </div>
         </div>
       )}
