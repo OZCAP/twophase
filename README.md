@@ -1,25 +1,14 @@
-<img src="assets/icon.svg" width="64" height="64" alt="">
+<p align="center"><img src="assets/icon.svg" width="72" height="72" alt=""></p>
+<h1 align="center">Twophase</h1>
+<p align="center"><b>Human-in-the-loop database proxy designed for agents.</b></p>
 
-# Twophase
+![Reads run instantly, writes wait for your tap, dangerous statements are blocked](assets/flow.png)
 
-**Your agent prepares. You commit.**
+![A push notification opens the approval on your phone](assets/phone.png)
 
-<img src="assets/how-it-works.png" width="600" alt="How Twophase works: connect a database, give each client a key, get a push when it matters, approve once or for a while, set standing rules once">
+![Your agent connects to Twophase with its own key; only Twophase has the real database password](assets/connect.png)
 
-Twophase is a database proxy with a human in the loop. The name comes from two-phase commit:
-the agent prepares the change, and a human commits it. It holds the real credentials for your databases
-(**Postgres, MySQL and MariaDB**), gives each client its own token, and checks **every SQL
-statement** before it runs. Reads can go straight through, writes can wait for you to approve them
-on your phone, and dangerous statements are refused. Agents use the proxy's own MCP; psql, the
-mysql client, apps and ORMs connect to it as if it were the database. Everything goes through the
-same rules, approvals and audit log.
-
-```
- agent ──MCP (Bearer tp_…)──────────▶ /mcp/<db>  ─┐
- psql / app ──Postgres (SCRAM)──────▶ :6432/<db> ─┼─▶ parse SQL ─▶ policy ─▶ trust window? ─▶ ask human ─▶ database
- mysql / app ──MySQL (caching_sha2)─▶ :3307/<db> ─┘                                          │
-                                                                                              └─▶ PWA (live UI + Web Push)
-```
+<p align="center">Works with Postgres, MySQL and MariaDB, over MCP or a normal connection string.</p>
 
 **Engines.** Postgres; anything that speaks Postgres's protocol and SQL (Supabase, Neon,
 Timescale, AlloyDB, CockroachDB, …) uses the Postgres engine. MySQL 5.7+/8.x and MariaDB 10.2+;
