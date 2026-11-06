@@ -104,8 +104,10 @@ export async function startProxy(overrides: Partial<Config> = {}, deps: { whois?
     },
     deps,
   );
-  const { httpPort, wirePort, mysqlWirePort } = await proxy.listen();
+  const { httpPort, mcpPort, wirePort, mysqlWirePort } = await proxy.listen();
   const base = `http://127.0.0.1:${httpPort}`;
+  /** Where hosted MCP lives: the main port, or its own port when `mcp` is configured. */
+  const mcpBase = mcpPort ? `http://127.0.0.1:${mcpPort}` : base;
 
   async function admin<T = any>(method: string, path: string, body?: unknown): Promise<T> {
     const res = await fetch(`${base}/admin/api${path}`, {
@@ -119,7 +121,7 @@ export async function startProxy(overrides: Partial<Config> = {}, deps: { whois?
 
   async function mcp(token: string, slug: string) {
     const client = new McpClient({ name: 'test-agent', version: '1.0.0' });
-    await client.connect(new StreamableHTTPClientTransport(new URL(`${base}/mcp/${slug}`), { requestInit: { headers: { authorization: `Bearer ${token}` } } }));
+    await client.connect(new StreamableHTTPClientTransport(new URL(`${mcpBase}/mcp/${slug}`), { requestInit: { headers: { authorization: `Bearer ${token}` } } }));
     return client;
   }
 
@@ -159,6 +161,7 @@ export async function startProxy(overrides: Partial<Config> = {}, deps: { whois?
 
   return {
     base,
+    mcpBase,
     wirePort: wirePort!,
     mysqlWirePort: mysqlWirePort!,
     admin,

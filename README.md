@@ -236,11 +236,9 @@ docker compose up -d --build
 ```
 
 This runs Twophase next to a Tailscale container that joins your tailnet as `TS_HOSTNAME` and
-serves (`deploy/tailscale-serve.json`):
+serves (configured by `deploy/tailscale-start.sh`):
 
-- `https://<TS_HOSTNAME>.<tailnet>.ts.net`: web app, admin API, hosted MCP. This uses port 443
-  unless you set `TS_HTTPS_PORT` in `.env`. For example, `TS_HTTPS_PORT=8443` serves them at
-  `https://<TS_HOSTNAME>.<tailnet>.ts.net:8443`;
+- `https://<TS_HOSTNAME>.<tailnet>.ts.net`: web app, admin API, hosted MCP;
 - `<TS_HOSTNAME>:6432`: Postgres clients;
 - `<TS_HOSTNAME>:3307`: MySQL / MariaDB clients.
 
@@ -250,6 +248,14 @@ that can reach HTTPS can manage the app. Control access with Tailscale grants/AC
 port (443, or `TS_HTTPS_PORT`).
 Set `ADMIN_PASSWORD` in the untracked `.env` to also require a management password.
 
+- **Ports.** Set these in `.env`:
+  - `TS_HTTPS_PORT` (default 443) moves the web app and admin API. For example,
+    `TS_HTTPS_PORT=8443` serves them at `https://<TS_HOSTNAME>.<tailnet>.ts.net:8443`.
+  - `TS_MCP_PORT` gives hosted MCP its own port, e.g. `TS_MCP_PORT=9443` for
+    `https://<TS_HOSTNAME>.<tailnet>.ts.net:9443/mcp/<database>`. MCP is then no longer served on
+    the web app's port, so you can grant MCP clients and admins access separately.
+
+  The client configs shown in the app use these ports. The database ports stay 6432 and 3307.
 - **Persistence.** The database lives in the `twophase-data` volume; the node's
   Tailscale identity lives in `tailscale-state`. Both containers use `restart: unless-stopped`,
   so they come back after a reboot (with Docker enabled at boot).
@@ -362,6 +368,8 @@ to the Home Screen** (Share → Add to Home Screen, open it from there, then Set
 | Var | Default | Notes |
 | --- | --- | --- |
 | `PORT` / `HOST` | `8787` / `0.0.0.0` | Web UI, admin API, hosted MCP |
+| `MCP_PORT` | unset | Serve hosted MCP on this port only (same `HOST`), not on `PORT` |
+| `MCP_PUBLIC_PORT` | `MCP_PORT` | MCP port shown in client snippets (if something in front remaps it) |
 | `WIRE_PORT` / `WIRE_HOST` | `6432` / `HOST` | Postgres listener; `WIRE_ENABLED=false` turns it off |
 | `WIRE_PUBLIC_PORT` | `WIRE_PORT` | Port shown in client snippets (if something in front remaps it) |
 | `MYSQL_WIRE_PORT` / `MYSQL_WIRE_HOST` | `3307` / `WIRE_HOST` | MySQL / MariaDB listener; `MYSQL_WIRE_ENABLED=false` turns it off |

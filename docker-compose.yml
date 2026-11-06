@@ -1,5 +1,6 @@
 # Twophase on your tailnet. Tailscale runs alongside it and serves:
 #   https://<TS_HOSTNAME>.<tailnet>.ts.net   web app, admin API, hosted MCP (port 443, or TS_HTTPS_PORT)
+#   https://<TS_HOSTNAME>.<tailnet>.ts.net:<TS_MCP_PORT>   hosted MCP only, if TS_MCP_PORT is set
 #   <TS_HOSTNAME>:6432                        Postgres clients
 #   <TS_HOSTNAME>:3307                        MySQL / MariaDB clients
 #
@@ -25,8 +26,10 @@ services:
       TS_EXTRA_ARGS: ${TS_EXTRA_ARGS:-}
       TS_STATE_DIR: /var/lib/tailscale
       TS_SOCKET: /var/run/tailscale/tailscaled.sock
-      # Port for the web app, admin API and hosted MCP: https://<TS_HOSTNAME>.<tailnet>.ts.net:<port>
+      # Port for the web app and admin API: https://<TS_HOSTNAME>.<tailnet>.ts.net:<port>
       TS_HTTPS_PORT: ${TS_HTTPS_PORT:-443}
+      # Optional: hosted MCP on its own port (otherwise it shares TS_HTTPS_PORT).
+      TS_MCP_PORT: ${TS_MCP_PORT:-}
       # Userspace networking: no /dev/net/tun or extra capabilities needed.
       TS_USERSPACE: "true"
     volumes:
@@ -49,6 +52,9 @@ services:
       # Verified tailnet devices can manage the app; optionally require a password too.
       # Control access with Tailscale grants/ACLs for the HTTPS port (443 unless TS_HTTPS_PORT is set).
       ADMIN_AUTH: tailscale
+      # With TS_MCP_PORT, MCP moves to its own listener (8788) behind that port.
+      MCP_PORT: ${TS_MCP_PORT:+8788}
+      MCP_PUBLIC_PORT: ${TS_MCP_PORT:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       ADMIN_PASSWORD_FILE: ${ADMIN_PASSWORD_FILE:-}
       TAILSCALE_SOCKET: /var/run/tailscale/tailscaled.sock

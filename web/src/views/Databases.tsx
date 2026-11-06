@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { DEFAULT_PORT, defaultKey, ENGINE_LABEL, ENGINES, isMysql, OPERATIONS, proxyHost, VERBS, wireEnabled, wirePort, type Engine, type Action, type ConnectionTest, type Database, type DatabaseDraft, type Operation, type PolicyTarget, type Rule, type TableInfo, type Verb } from '../api';
+import { DEFAULT_PORT, defaultKey, ENGINE_LABEL, ENGINES, isMysql, mcpUrl as mcpUrlFor, OPERATIONS, proxyHost, VERBS, wireEnabled, wirePort, type Engine, type Action, type ConnectionTest, type Database, type DatabaseDraft, type Operation, type PolicyTarget, type Rule, type TableInfo, type Verb } from '../api';
 import { parseConnectionString, suggestName } from '../connstr';
 import { go, useProxy } from '../state';
 import { ACTION_LABEL, ActionBadge, ActionPicker, attempt, CopyButton, Empty, Modal, OP_LABEL, OpChip, opDescription, VERB_LABEL, verbDescription, verbsFor } from '../ui';
@@ -99,7 +99,7 @@ function DatabaseDetail({ db }: { db: Database }) {
       await load();
     });
 
-  const mcpUrl = `${location.origin}/mcp/${db.slug}`;
+  const mcpUrl = mcpUrlFor(status, db.slug);
   const wireEndpoint = `${proxyHost()}:${wirePort(status, db.engine)}/${db.slug}`;
   const engine = ENGINE_LABEL[db.engine];
 

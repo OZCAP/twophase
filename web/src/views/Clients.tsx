@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ENGINE_LABEL, isMysql, mysqlUrl, proxyHost, psqlUrl, wirePort, type Database, type DatabaseAccess, type IssuedToken, type ProxyUser } from '../api';
+import { ENGINE_LABEL, isMysql, mcpUrl, mysqlUrl, proxyHost, psqlUrl, wirePort, type Database, type DatabaseAccess, type IssuedToken, type ProxyUser } from '../api';
 import { go, useProxy } from '../state';
 import { attempt, Code, CopyButton, Empty, Modal, relative, TRUST_DURATIONS } from '../ui';
 import { GrantRow } from './Approvals';
@@ -246,11 +246,11 @@ function TokenReveal({ issued, databases, onClose }: { issued: IssuedToken; data
   const wireDbs = issued.user.access.filter((a) => a.allowWire).map((a) => byId.get(a.databaseId)!).filter(Boolean);
 
   const json = JSON.stringify(
-    { mcpServers: Object.fromEntries(mcpDbs.map((d) => [d.slug, { type: 'http', url: `${location.origin}/mcp/${d.slug}`, headers: { Authorization: `Bearer ${issued.token}` } }])) },
+    { mcpServers: Object.fromEntries(mcpDbs.map((d) => [d.slug, { type: 'http', url: mcpUrl(status, d.slug), headers: { Authorization: `Bearer ${issued.token}` } }])) },
     null,
     2,
   );
-  const cli = mcpDbs.map((d) => `claude mcp add --transport http ${d.slug} ${location.origin}/mcp/${d.slug} \\\n  --header "Authorization: Bearer ${issued.token}"`).join('\n\n');
+  const cli = mcpDbs.map((d) => `claude mcp add --transport http ${d.slug} ${mcpUrl(status, d.slug)} \\\n  --header "Authorization: Bearer ${issued.token}"`).join('\n\n');
   const pgDbs = wireDbs.filter((d) => !isMysql(d.engine));
   const myDbs = wireDbs.filter((d) => isMysql(d.engine));
   const psql = pgDbs.map((d) => `psql "${psqlUrl(issued.user.username, issued.token, d.slug, wirePort(status, d.engine))}"`).join('\n');

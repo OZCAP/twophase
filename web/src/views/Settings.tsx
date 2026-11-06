@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Api, type AuthInfo } from '../api';
+import { Api, mcpOrigin, type AuthInfo } from '../api';
 import { clearRefreshMarker, serviceWorkerVersion, currentSubscription, disablePush, enablePush, isIos, isStandalone, pushSupported, refreshApp } from '../push';
 import { useProxy } from '../state';
 import { attempt } from '../ui';
@@ -14,6 +14,8 @@ export function SettingsView() {
         <dl className="facts">
           <dt>Server</dt>
           <dd className="mono">{location.origin}</dd>
+          <dt>Hosted MCP</dt>
+          <dd className="mono">{status ? `${mcpOrigin(status)}/mcp/<database>` : '…'}</dd>
           <dt>Version</dt>
           <dd>{status?.version ?? '…'}</dd>
           <dt>Live updates</dt>

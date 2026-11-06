@@ -4,6 +4,12 @@ import { readFileSync } from 'node:fs';
 export interface Config {
   host: string;
   port: number;
+  /**
+   * Separate listener for the hosted MCP endpoint. When set, `/mcp/…` is served only on this port
+   * and the main port keeps the web UI and admin API. `publicPort` is the port clients should use
+   * (differs when something like `tailscale serve` fronts it).
+   */
+  mcp: { port: number; publicPort: number } | null;
   dataDir: string;
   /** Built web admin UI to serve at `/`, if present. */
   webDir: string;
@@ -37,9 +43,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     : env.ADMIN_PASSWORD || undefined;
   if (env.ADMIN_PASSWORD_FILE && !adminPassword) throw new Error('ADMIN_PASSWORD_FILE must contain a password');
   if (adminPassword && Buffer.byteLength(adminPassword) > 1024) throw new Error('Management password must be at most 1024 bytes');
+  for (const name of ['MCP_PORT', 'MCP_PUBLIC_PORT'] as const) {
+    const v = env[name];
+    if (v && !(/^\d+$/.test(v) && Number(v) >= 1 && Number(v) <= 65535)) throw new Error(`${name} must be a port number (1-65535)`);
+  }
+  if (!env.MCP_PORT && env.MCP_PUBLIC_PORT) throw new Error('MCP_PUBLIC_PORT needs MCP_PORT');
+  if (env.MCP_PORT && Number(env.MCP_PORT) === Number(env.PORT ?? 8787)) throw new Error('MCP_PORT must differ from PORT; leave it unset to serve MCP on PORT');
   return {
     host: env.HOST ?? '0.0.0.0',
     port: Number(env.PORT ?? 8787),
+    mcp: env.MCP_PORT ? { port: Number(env.MCP_PORT), publicPort: Number(env.MCP_PUBLIC_PORT || env.MCP_PORT) } : null,
     dataDir: env.DATA_DIR ?? './data',
     webDir: env.WEB_DIR ?? fileURLToPath(new URL('../../web/dist', import.meta.url)),
     adminAuth: env.ADMIN_AUTH === 'tailscale' ? 'tailscale' : 'token',

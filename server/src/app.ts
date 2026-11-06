@@ -69,29 +69,52 @@ export function createApp(config: Config, overrides: { whois?: Whois } = {}) {
     store, approvals, executors, events, push, config, adminAuth,
     password: config.adminPassword ? new AdminPassword(config.adminPassword, store) : undefined,
   }));
-  app.use(mcp.router);
+  // With MCP_PORT, MCP gets its own listener and the main port serves only the UI and admin API.
+  const mcpApp = config.mcp ? express() : null;
+  if (mcpApp) {
+    mcpApp.disable('x-powered-by');
+    mcpApp.use(express.json({ limit: '4mb' }));
+    mcpApp.get('/healthz', (_req, res) => {
+      res.json({ ok: true });
+    });
+    mcpApp.use(mcp.router);
+  } else {
+    app.use(mcp.router);
+  }
   if (existsSync(config.webDir)) app.use(express.static(config.webDir));
 
   let http: HttpServer | null = null;
+  let mcpHttp: HttpServer | null = null;
   return {
     app,
     store,
     approvals,
-    /** Loads the SQL parser, then starts HTTP (admin + MCP) and the Postgres and MySQL listeners. */
-    async listen(): Promise<{ http: HttpServer; httpPort: number; wirePort: number | null; mysqlWirePort: number | null }> {
+    /** Loads the SQL parser, then starts HTTP (admin + MCP, or MCP on its own port) and the Postgres and MySQL listeners. */
+    async listen(): Promise<{ http: HttpServer; httpPort: number; mcpPort: number | null; wirePort: number | null; mysqlWirePort: number | null }> {
       await initAnalyzer();
-      http = await new Promise<HttpServer>((resolve) => {
-        const s = app.listen(config.port, config.host, () => resolve(s));
-      });
+      const serve = (a: express.Express, port: number) =>
+        new Promise<HttpServer>((resolve, reject) => {
+          const s = a.listen(port, config.host, () => resolve(s));
+          s.once('error', reject);
+        });
+      http = await serve(app, config.port);
+      mcpHttp = mcpApp && config.mcp ? await serve(mcpApp, config.mcp.port) : null;
       housekeeping.start();
       const wirePort = wire ? await wire.listen() : null;
       const mysqlWirePort = mysqlWire ? await mysqlWire.listen() : null;
-      return { http, httpPort: (http.address() as AddressInfo).port, wirePort, mysqlWirePort };
+      return {
+        http,
+        httpPort: (http.address() as AddressInfo).port,
+        mcpPort: mcpHttp ? (mcpHttp.address() as AddressInfo).port : null,
+        wirePort,
+        mysqlWirePort,
+      };
     },
     async close() {
       housekeeping.stop();
       approvals.shutdown();
       http?.close();
+      mcpHttp?.close();
       await wire?.close();
       await mysqlWire?.close();
       await mcp.close();

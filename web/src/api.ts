@@ -189,6 +189,8 @@ export interface ProxyStatus {
   /** `tailscale`: no token; the server identified this device via `tailscale serve`. */
   auth: { mode: 'token' | 'tailscale' | 'password'; device: string | null; login: string | null; passwordRequired?: boolean };
   version: string;
+  /** Port MCP clients should use when MCP has its own port; null when it's on this page's origin. */
+  mcp?: { port: number | null };
   wire: { enabled: boolean; port: number };
   mysqlWire: { enabled: boolean; port: number };
   webPushSubscriptions: number;
@@ -336,6 +338,17 @@ export function psqlUrl(username: string, token: string, slug: string, port: num
 export function mysqlUrl(username: string, token: string, slug: string, port: number) {
   return `mysql://${encodeURIComponent(username)}:${encodeURIComponent(token)}@${proxyHost()}:${port}/${slug}`;
 }
+
+/** Origin MCP clients should use: this page's origin, or the same host on MCP's own port. */
+export function mcpOrigin(status: ProxyStatus | null, pageOrigin = location.origin) {
+  const port = status?.mcp?.port;
+  if (!port) return pageOrigin;
+  const url = new URL(pageOrigin);
+  url.port = String(port); // the URL drops it again when it's the scheme's default
+  return url.origin;
+}
+
+export const mcpUrl = (status: ProxyStatus | null, slug: string) => `${mcpOrigin(status)}/mcp/${slug}`;
 
 /** The proxy's listener port for a database's wire protocol. */
 export const wirePort = (status: ProxyStatus | null, engine: Engine) => (isMysql(engine) ? (status?.mysqlWire?.port ?? 3307) : (status?.wire.port ?? 6432));

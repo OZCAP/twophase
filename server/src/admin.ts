@@ -176,6 +176,8 @@ export function adminRouter(deps: AdminDeps) {
     res.json({
       auth: { mode: auth.mode, device: identity?.node ?? null, login: identity?.login ?? null, ...(password && { passwordRequired: true }) },
       version: '0.2.0',
+      // null: MCP is on the same origin as this UI.
+      mcp: { port: config.mcp?.publicPort ?? null },
       wire: { enabled: config.wire.enabled, port: config.wire.publicPort },
       mysqlWire: { enabled: config.mysqlWire.enabled, port: config.mysqlWire.publicPort },
       webPushSubscriptions: store.listPushSubscriptions().length,
