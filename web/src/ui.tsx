@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { isMysql, targetOperation, VERBS, type Access, type Action, type Engine, type Operation, type PolicyTarget, type Verb } from './api';
 
 export const ACTION_LABEL: Record<Action, string> = { allow: 'Allow', approve: 'Ask', deny: 'Deny' };
@@ -108,8 +108,42 @@ export function StatusDot({ state }: { state?: string }) {
   return <span className={`dot dot-${state ?? 'idle'}`} title={state ?? 'idle'} />;
 }
 
+/** A query block. Long queries start collapsed with a button to expand them. */
 export function Code({ children }: { children: string }) {
-  return <pre className="code">{children}</pre>;
+  const ref = useRef<HTMLPreElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || expanded) return;
+    const check = () => setOverflows(el.scrollHeight > el.clientHeight + 1);
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [children, expanded]);
+
+  return (
+    <div className="code-wrap">
+      <pre ref={ref} className={`code${expanded ? ' expanded' : ' collapsed'}${overflows && !expanded ? ' clipped' : ''}`}>
+        {children}
+      </pre>
+      {(overflows || expanded) && (
+        <button
+          type="button"
+          className="code-toggle"
+          aria-expanded={expanded}
+          onClick={(ev) => {
+            ev.stopPropagation();
+            setExpanded((x) => !x);
+          }}
+        >
+          {expanded ? 'Show less' : 'Show full query'}
+        </button>
+      )}
+    </div>
+  );
 }
 
 export function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) {

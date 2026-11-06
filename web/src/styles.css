@@ -82,7 +82,11 @@ p { margin: 0; }
 .clickable:hover { background: var(--surface-2); }
 .empty { padding: 28px; text-align: center; border: 1px dashed var(--border); border-radius: var(--radius); color: var(--muted); display: flex; flex-direction: column; gap: 6px; }
 .empty strong { color: var(--text); }
-.code { margin: 0; padding: 10px 12px; background: var(--surface-2); border-radius: 8px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; max-height: 360px; }
+.code { margin: 0; padding: 10px 12px; background: var(--surface-2); border-radius: 8px; overflow-x: auto; white-space: pre-wrap; word-break: break-word; }
+.code.collapsed { max-height: 9.5em; overflow: hidden; }
+.code.clipped { -webkit-mask-image: linear-gradient(to bottom, #000 65%, transparent); mask-image: linear-gradient(to bottom, #000 65%, transparent); }
+.code-toggle { font: inherit; font-size: 0.85rem; font-weight: 500; color: var(--accent); background: none; border: 0; padding: 6px 2px 0; cursor: pointer; }
+.code-toggle:hover { text-decoration: underline; }
 .token { padding: 8px 10px; background: var(--surface-2); border-radius: 8px; word-break: break-all; }
 details summary { cursor: pointer; }
 .facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 16px; margin: 0; }
