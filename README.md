@@ -238,13 +238,16 @@ docker compose up -d --build
 This runs Twophase next to a Tailscale container that joins your tailnet as `TS_HOSTNAME` and
 serves (`deploy/tailscale-serve.json`):
 
-- `https://<TS_HOSTNAME>.<tailnet>.ts.net`: web app, admin API, hosted MCP;
+- `https://<TS_HOSTNAME>.<tailnet>.ts.net`: web app, admin API, hosted MCP. This uses port 443
+  unless you set `TS_HTTPS_PORT` in `.env`. For example, `TS_HTTPS_PORT=8443` serves them at
+  `https://<TS_HOSTNAME>.<tailnet>.ts.net:8443`;
 - `<TS_HOSTNAME>:6432`: Postgres clients;
 - `<TS_HOSTNAME>:3307`: MySQL / MariaDB clients.
 
 Nothing is published on the host. Sign-in is by Tailscale identity
 ([below](#sign-in-with-tailscale-instead-of-an-admin-token)): every verified tailnet device
-that can reach HTTPS can manage the app. Control access with Tailscale grants/ACLs for port 443.
+that can reach HTTPS can manage the app. Control access with Tailscale grants/ACLs for the HTTPS
+port (443, or `TS_HTTPS_PORT`).
 Set `ADMIN_PASSWORD` in the untracked `.env` to also require a management password.
 
 - **Persistence.** The database lives in the `twophase-data` volume; the node's
@@ -270,6 +273,7 @@ Set `ADMIN_PASSWORD` in the untracked `.env` to also require a management passwo
 
 ```sh
 docker compose -f docker-compose.local.yml up -d --build   # 127.0.0.1:8787, :6432, :3307
+HTTP_PORT=9000 docker compose -f docker-compose.local.yml up -d   # web app and MCP on 127.0.0.1:9000 instead
 docker compose -f docker-compose.local.yml logs twophase    # the admin token, on first boot
 ```
 
@@ -303,7 +307,8 @@ When a management password is configured, that device must also sign in with the
 
 - **Tailscale grants/ACLs control admin access.** Grant HTTPS access only to devices you want
   to administer the proxy. A device with HTTPS access can approve its own statements. The Docker
-  setup uses port 443; use your configured HTTPS port when running `tailscale serve` on the host.
+  setup uses port 443 (or `TS_HTTPS_PORT`); use your configured HTTPS port when running
+  `tailscale serve` on the host.
 - Tagged and user-owned devices both work; no application device allow-list is needed.
 - The proxy refuses to start in this mode unless it's bound to loopback. Requests without a
   verified Tailscale identity are rejected. Processes on the proxy host itself are trusted.

@@ -14,7 +14,7 @@ services:
     image: twophase:latest
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8787:8787" # web app, admin API, hosted MCP
+      - "127.0.0.1:${HTTP_PORT:-8787}:8787" # web app, admin API, hosted MCP (HTTP_PORT on the host)
       - "127.0.0.1:6432:6432" # Postgres clients
       - "127.0.0.1:3307:3307" # MySQL / MariaDB clients
     environment:

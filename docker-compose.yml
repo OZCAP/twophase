@@ -1,5 +1,5 @@
 # Twophase on your tailnet. Tailscale runs alongside it and serves:
-#   https://<TS_HOSTNAME>.<tailnet>.ts.net   web app, admin API, hosted MCP
+#   https://<TS_HOSTNAME>.<tailnet>.ts.net   web app, admin API, hosted MCP (port 443, or TS_HTTPS_PORT)
 #   <TS_HOSTNAME>:6432                        Postgres clients
 #   <TS_HOSTNAME>:3307                        MySQL / MariaDB clients
 #
@@ -17,18 +17,22 @@ services:
     image: tailscale/tailscale:stable
     hostname: ${TS_HOSTNAME:-twophase}
     restart: unless-stopped
+    # Writes the serve config for TS_HTTPS_PORT, then starts Tailscale as usual.
+    entrypoint: ["/bin/sh", "/config/tailscale-start.sh"]
+    command: ["/usr/local/bin/containerboot"]
     environment:
       TS_AUTHKEY: ${TS_AUTHKEY:-}
       TS_EXTRA_ARGS: ${TS_EXTRA_ARGS:-}
       TS_STATE_DIR: /var/lib/tailscale
       TS_SOCKET: /var/run/tailscale/tailscaled.sock
-      TS_SERVE_CONFIG: /config/serve.json
+      # Port for the web app, admin API and hosted MCP: https://<TS_HOSTNAME>.<tailnet>.ts.net:<port>
+      TS_HTTPS_PORT: ${TS_HTTPS_PORT:-443}
       # Userspace networking: no /dev/net/tun or extra capabilities needed.
       TS_USERSPACE: "true"
     volumes:
       - tailscale-state:/var/lib/tailscale
       - tailscale-socket:/var/run/tailscale
-      - ./deploy/tailscale-serve.json:/config/serve.json:ro
+      - ./deploy:/config:ro
 
   twophase:
     build:
@@ -43,7 +47,7 @@ services:
     environment:
       HOST: 127.0.0.1
       # Verified tailnet devices can manage the app; optionally require a password too.
-      # Control access with Tailscale grants/ACLs for port 443.
+      # Control access with Tailscale grants/ACLs for the HTTPS port (443 unless TS_HTTPS_PORT is set).
       ADMIN_AUTH: tailscale
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       ADMIN_PASSWORD_FILE: ${ADMIN_PASSWORD_FILE:-}
